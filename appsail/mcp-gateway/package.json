@@ -1,0 +1,12 @@
+{
+  "name": "mcp-gateway",
+  "private": true,
+  "version": "0.0.1",
+  "scripts": {
+    "build": "node ../../scripts/bundle.mjs appsail/mcp-gateway/src/index.ts appsail/mcp-gateway/dist/index.js"
+  },
+  "dependencies": {
+    "@dozai/contracts": "*",
+    "@dozai/core": "*"
+  }
+}

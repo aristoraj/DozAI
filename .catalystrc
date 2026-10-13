@@ -1,0 +1,48 @@
+{
+  "defaults": {
+    "project": 1,
+    "env": 1
+  },
+  "actives": {
+    "project": 2,
+    "env": 1
+  },
+  "projects": [
+    {
+      "idx": 1,
+      "id": "36235000000011044",
+      "name": "Project-Rainfall",
+      "domain": {
+        "id": "10101800634",
+        "name": "project-rainfall-893409434.development"
+      },
+      "timezone": "Asia/Kolkata",
+      "env": [
+        {
+          "idx": 1,
+          "id": "893409434",
+          "name": "Development",
+          "type": 3
+        }
+      ]
+    },
+    {
+      "idx": 2,
+      "id": "36235000000024365",
+      "name": "DozAI-Dev",
+      "domain": {
+        "id": "10135585515",
+        "name": "dozai-dev-893409434.development"
+      },
+      "timezone": "Asia/Kolkata",
+      "env": [
+        {
+          "idx": 1,
+          "id": "893409434",
+          "name": "Development",
+          "type": 3
+        }
+      ]
+    }
+  ]
+}

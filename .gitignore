@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+.env.*
+.catalyst/
+*.log
+functions/core_api/index.js
+appsail/mcp-gateway/dist/
+client/
+.env.local

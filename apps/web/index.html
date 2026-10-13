@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#fdf8f4" />
+  <title>DozAI</title>
+  <meta name="description" content="DozAI: verified follow-up for programme participants." />
+  <link rel="stylesheet" href="/src/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Primary navigation">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div>
+          <div class="brand-name">dozai</div>
+          <div class="brand-sub">by EdZola</div>
+        </div>
+      </div>
+
+      <div class="mission-chip">
+        <span class="live-dot"></span>
+        <div>
+          <strong id="missionName">Loading…</strong>
+          <small id="missionVersion">&nbsp;</small>
+        </div>
+      </div>
+
+      <nav class="nav-list" id="primaryNav">
+        <button class="nav-item active" data-view="overview"><span class="nav-icon">⌂</span><span>Command centre</span></button>
+        <button class="nav-item" data-view="cases"><span class="nav-icon">▦</span><span>Cases</span><span class="nav-count" id="caseCount">0</span></button>
+        <button class="nav-item" data-view="campaigns"><span class="nav-icon">↗</span><span>Campaigns</span></button>
+        <button class="nav-item" data-view="reviews"><span class="nav-icon">✓</span><span>Review queue</span><span class="nav-count coral" id="reviewCount">0</span></button>
+        <button class="nav-item" data-view="approvals"><span class="nav-icon">☑</span><span>Approvals</span><span class="nav-count coral" id="approvalCount">0</span></button>
+        <button class="nav-item" data-view="agent"><span class="nav-icon">AI</span><span>Claude engine</span></button>
+        <button class="nav-item" data-view="missions"><span class="nav-icon">◎</span><span>Mission</span></button>
+        <button class="nav-item" data-view="audit"><span class="nav-icon">≡</span><span>Audit trail</span></button>
+      </nav>
+
+      <div class="sidebar-spacer"></div>
+      <div class="simulation-note" id="runtimeNote"><span class="simulation-icon">◇</span><div><strong>Checking…</strong><small>&nbsp;</small></div></div>
+      <div class="user-card" id="userCard">
+        <span class="avatar" id="userAvatar">?</span>
+        <span><strong id="userName">Not signed in</strong><small id="userRole">&nbsp;</small></span>
+      </div>
+    </aside>
+
+    <main class="main-shell">
+      <header class="topbar">
+        <button class="mobile-menu" id="mobileMenu" aria-label="Toggle menu">☰</button>
+        <div class="context-select">
+          <span class="context-label">Workspace</span>
+          <strong id="workspaceName">DozAI</strong>
+        </div>
+        <div class="topbar-actions">
+          <label class="role-switcher" id="roleSwitcherWrap" hidden>
+            <span>Local role</span>
+            <select id="roleSwitcher" aria-label="Role for local development">
+              <option value="admin">Admin</option>
+              <option value="agentops">Agent operations</option>
+              <option value="operator">Operator</option>
+              <option value="reviewer">Reviewer</option>
+            </select>
+          </label>
+          <button class="icon-button" id="refresh" title="Refresh" aria-label="Refresh">↻</button>
+        </div>
+      </header>
+
+      <section id="appView" class="view-container" aria-live="polite"></section>
+    </main>
+  </div>
+
+  <div class="drawer-backdrop" id="drawerBackdrop" hidden></div>
+  <aside class="case-drawer" id="caseDrawer" aria-label="Case details" aria-hidden="true"></aside>
+
+  <div class="modal-backdrop" id="modalBackdrop" hidden>
+    <section class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle"></section>
+  </div>
+
+  <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
+
+  <script>window.DOZAI_API_BASE = /catalystserverless[.](com|in|eu)$/.test(location.hostname) ? "/server/core_api/api" : "/api";</script>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

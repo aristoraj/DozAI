@@ -1,0 +1,123 @@
+// Adapters. Sprint 1A uses fakes only: no live WhatsApp, voice or Claude dependency.
+// Real adapters (EdZola WhatsApp, ZoLabs, Claude Managed Agents) implement the same ports in Sprint 1B.
+import type { RunAgentInput, ToolName } from "@dozai/contracts";
+import { CaseService, GatewayTools, newId, type AgentSession, type ToolResult, type ToolSession, type TraceStep, type WakeRequest } from "@dozai/core";
+
+// ---- Ports ------------------------------------------------------------------
+
+export interface ChannelPort {
+  /** Deliver pending outbox items. Returns how many were sent. */
+  dispatchOutbox(svc: CaseService, tenant: string): Promise<number>;
+}
+
+export interface AgentRuntimePort {
+  runCase(svc: CaseService, tenant: string, caseId: string, scenario: RunAgentInput["scenario"]): Promise<AgentSession>;
+  /** Optional: continue after a real inbound reply. Only runtimes talking to a live channel need it. */
+  resumeCase?(svc: CaseService, tenant: string, caseId: string, wake?: WakeRequest): Promise<AgentSession>;
+}
+
+// ---- Fake WhatsApp / voice ----------------------------------------------------
+
+export class FakeChannels implements ChannelPort {
+  async dispatchOutbox(svc: CaseService, tenant: string): Promise<number> {
+    if ((await svc.controls(tenant)).paused) return 0; // the kill switch
+    let n = 0;
+    for (const o of await svc.store.listOutbox(tenant)) {
+      if (o.status !== "pending" || o.kind === "voice_call") continue;
+      await svc.store.putOutbox({ ...o, status: "sent", attempts: o.attempts + 1 });
+      n++;
+    }
+    return n;
+  }
+
+  /** Scripted participant reply, delivered the way a signed webhook would be: ledger first. */
+  async scenarioReply(svc: CaseService, tenant: string, caseId: string, scenario: RunAgentInput["scenario"]) {
+    const c = await svc.getCase(tenant, caseId);
+    const p = await svc.store.getParticipant(tenant, c.participant_id);
+    const id = `fake_${caseId}_${scenario}_${svc.now().getTime()}`;
+    const A = (question_id: string, value: string, confidence = 0.85) => ({ question_id, value, confidence });
+    switch (scenario) {
+      case "no_response": return undefined;
+      case "opt_out": return svc.recordInbound(tenant, caseId, { provider_event_id: id, channel: "whatsapp", summary: "Participant replied: stop", opt_out: true });
+      case "same_job": return svc.recordInbound(tenant, caseId, { provider_event_id: id, channel: "whatsapp", summary: "Participant confirmed the same job", consent: "granted", answers: [A("work_status", "working", 0.95), A("employer_name", p?.recorded_employer ?? "", 0.94)] });
+      case "changed_job": return svc.recordInbound(tenant, caseId, { provider_event_id: id, channel: "whatsapp", summary: "Participant reported a new employer", consent: "granted", answers: [A("work_status", "working", 0.9), A("employer_name", "Nova Services", 0.68)] });
+      case "employer_conflict": return svc.recordInbound(tenant, caseId, { provider_event_id: id, channel: "whatsapp", summary: "Participant reported the same job, different employer name", consent: "granted", answers: [A("work_status", "working", 0.9), A("employer_name", `${p?.recorded_employer ?? "Employer"} Express`, 0.7)] });
+      case "not_employed": return svc.recordInbound(tenant, caseId, { provider_event_id: id, channel: "whatsapp", summary: "Participant is not working at present", consent: "granted", answers: [A("work_status", "not_working", 0.95)] });
+    }
+  }
+}
+
+// ---- Scripted agent (stands in for the Claude session) --------------------------
+
+const DECISIONS: Record<RunAgentInput["scenario"], { outcome: "confirmed" | "not_confirmed"; state: "same_job" | "changed_job" | "not_employed"; confidence: number; why: string } | null> = {
+  same_job: { outcome: "confirmed", state: "same_job", confidence: 0.93, why: "Employer and status match the programme record." },
+  changed_job: { outcome: "confirmed", state: "changed_job", confidence: 0.68, why: "Participant reports a new employer; entity match is low-confidence." },
+  employer_conflict: { outcome: "confirmed", state: "same_job", confidence: 0.9, why: "Participant says same job but gave a different employer name." },
+  not_employed: { outcome: "not_confirmed", state: "not_employed", confidence: 0.9, why: "Participant reports not working; placement retention not confirmed." },
+  opt_out: null,
+  no_response: null,
+};
+
+export class ScriptedAgentRuntime implements AgentRuntimePort {
+  constructor(private tools: GatewayTools, private channels: FakeChannels = new FakeChannels(), private employeeVersion = "1.0.0") {}
+
+  async runCase(svc: CaseService, tenant: string, caseId: string, scenario: RunAgentInput["scenario"]): Promise<AgentSession> {
+    const mission = await svc.getMission(tenant, (await svc.getCase(tenant, caseId)).mission_version);
+    const employee = await svc.employeeFor(mission);
+    const ctx: ToolSession = { session_id: newId("sesn"), tenant_id: tenant, case_id: caseId, mission_version: mission.version, employee_version: employee.version, allowed_tools: employee.allowed_tools };
+    const session: AgentSession = { session_id: ctx.session_id, tenant_id: tenant, case_id: caseId, employee_version: employee.version, mission_version: ctx.mission_version, status: "running", tokens_in: 0, tokens_out: 0, cost_usd: 0, budget_usd: 0.5, simulated: true, trace: [], started_at: svc.now().toISOString() };
+    let n = 0;
+    const step = (label: string, type: string, detail: string, extra: Partial<TraceStep> = {}) => {
+      session.trace.push({ label, type, detail, ts: svc.now().toISOString(), ...extra });
+      session.tokens_in += 700; session.tokens_out += 220;
+      session.cost_usd = Math.round((session.tokens_in * 3 + session.tokens_out * 15) / 10_000) / 100; // illustrative rates, simulated
+    };
+    const call = async (name: ToolName, input: Record<string, unknown>): Promise<ToolResult> => {
+      const r = await this.tools.call(ctx, name, input);
+      const held = !r.error && !!(r.data as { held?: boolean } | undefined)?.held;
+      step(`${name}`, "MCP tool", r.error ? `${r.error.code}: ${r.error.message}` : held ? "ok (held for approval)" : "ok", { tool: name, input, result: r.error ?? r.data, outcome: r.error ? "refused" : held ? "held" : "executed", case_version: r.case_version });
+      return r;
+    };
+    const key = () => `${ctx.session_id}-${++n}`;
+
+    await svc.store.putSession(session);
+    step("Session created", "session.created", "Pinned employee + mission version");
+    await svc.beginSession(tenant, caseId, `agent:${ctx.session_id}`);
+    await svc.emit({ tenant_id: tenant, case_id: caseId }, "agent_session_started", `agent:${ctx.session_id}`, "Agent session started", { session_id: ctx.session_id, simulated: true });
+    step("Objective received", "user.message", "Case and mission IDs only");
+
+    let r = await call("case_get_context", { case_id: caseId });
+    await call("mission_get_bundle", { mission_version_id: ctx.mission_version });
+    r = await call("whatsapp_send_template", { case_id: caseId, template_key: mission.intro_template, idempotency_key: key(), expected_version: r.case_version });
+    if (r.error) return this.finish(svc, session, "idle", r.error.message);
+
+    step("Waiting for reply", "session.status_idle", "Catalyst owns the wait");
+    await this.channels.dispatchOutbox(svc, tenant);
+    await this.channels.scenarioReply(svc, tenant, caseId, scenario);
+
+    const after = await svc.getCase(tenant, caseId);
+    if (after.status === "complete") return this.finish(svc, session, "completed", "Participant opted out. No further contact.");
+    const plan = DECISIONS[scenario];
+    if (!plan) return this.finish(svc, session, "idle", "No reply yet. The retry window is protected by policy.");
+
+    step("Participant event", "system.message", "Normalised inbound response");
+    r = await call("case_get_context", { case_id: caseId });
+    const refs = ((r.data as { evidence?: { evidence_ref: string }[] })?.evidence ?? []).map(e => e.evidence_ref);
+    r = await call("decision_propose", { case_id: caseId, idempotency_key: key(), expected_version: r.case_version, proposed_outcome: plan.outcome, livelihood_state: plan.state, confidence: plan.confidence, evidence_refs: refs, rationale: plan.why });
+    const state = (r.data as { state?: string } | undefined)?.state;
+    return this.finish(svc, session, "idle", state === "complete" ? "Auto-completed by policy." : "Handed to a human reviewer.");
+  }
+
+  private async finish(svc: CaseService, session: AgentSession, status: AgentSession["status"], detail: string): Promise<AgentSession> {
+    session.trace.push({ label: "Session idled", type: "session.status_idle", detail, ts: svc.now().toISOString() });
+    session.status = status;
+    await svc.store.putSession(session);
+    await svc.emit({ tenant_id: session.tenant_id, case_id: session.case_id }, "agent_session_ended", `agent:${session.session_id}`, `Agent session ${status}: ${detail}`, { session_id: session.session_id, cost_usd: session.cost_usd, simulated: true });
+    return session;
+  }
+}
+export * from "./claude";
+export * from "./interakt";
+export * from "./jobs";
+export * from "./classifier";
+export * from "./voice";

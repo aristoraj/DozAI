@@ -1,0 +1,22 @@
+{
+  "functions": {
+    "targets": [
+      "core_api",
+      "cron_tick"
+    ],
+    "ignore": [
+      "src",
+      "node_modules"
+    ],
+    "source": "functions"
+  },
+  "appsail": [
+    {
+      "source": ".",
+      "name": "dozai-mcp-gateway"
+    }
+  ],
+  "client": {
+    "source": "client"
+  }
+}

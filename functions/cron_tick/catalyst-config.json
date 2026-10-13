@@ -1,0 +1,11 @@
+{
+	"deployment": {
+		"name": "cron_tick",
+		"stack": "node22",
+		"type": "cron",
+		"env_variables": {}
+	},
+	"execution": {
+		"main": "index.js"
+	}
+}

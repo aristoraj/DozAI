@@ -1,0 +1,128 @@
+﻿"Task ID","Task List","Task Name","Description","Visible Outcome","Owner","Priority","Status","Start Date","Due Date","Duration (working days)","Work Hours (indicative)","Depends On","Item Type","Starts in Sprint","Ends in Sprint","Detailed Task IDs (subtasks)"
+"H01","High-level plan","Project governance and setup","Project governance and setup. Includes: Zoho project and board, repository with review rules, build pipeline, three environments, secrets custody, risk register, communication plan, AI-policy checklist, Interakt plan payment.
+
+VISIBLE OUTCOME: Zoho project running with this plan, a repository where nothing merges without review and a green build, and Development, UAT and Production environments created.
+
+DONE WHEN: A test pull request has gone through review and merge, UAT exists, and the risk register is published to the team.
+
+Progress: 2 of 11 detailed tasks are already done.","Zoho project running with this plan, a repository where nothing merges without review and a green build, and Development, UAT and Production environments created.","Tech Lead","High","In Progress","2026-10-06","2026-10-16","9","47","","Task","Before Sprint 1","Sprint 1","T001;T002;T003;T004;T005;T006;T007;T008;T009;T010;T055"
+"H02","High-level plan","Architecture and technology decisions","Architecture and technology decisions. Includes: Walkthrough review, use case, technology choices, cost model, architecture document, data model, security and privacy design, the 12 Oct product-team feedback, the agentic decision record, open-decision meeting, consent and data policy, test strategy, Meta versus Interakt decision.
+
+VISIBLE OUTCOME: A signed architecture pack: the decision record for the agentic design, the cost model, the consent and data-policy decisions and the test strategy.
+
+DONE WHEN: The product lead has signed the agentic decision record and each open decision has an owner and a date.
+
+Progress: 7 of 14 detailed tasks are already done.","A signed architecture pack: the decision record for the agentic design, the cost model, the consent and data-policy decisions and the test strategy.","Tech Lead","High","In Progress","2026-10-07","2026-10-20","10","85","H01","Task","Before Sprint 1","Sprint 1","T011;T012;T013;T014;T015;T016;T017;T018;T019;T020;T025;T028;T029;T051"
+"H03","High-level plan","Agentic design: Verification Employee, mission and tools","Agentic design: Verification Employee, mission and tools. Includes: Employee specification, mission specification v2, context layers and memory, tools master and guardrail contract, runtime choice (own tool loop or Managed Agents).
+
+VISIBLE OUTCOME: Approved specifications for the Verification Employee, the mission, the four context layers and the tools master, plus a written recommendation on the agent runtime.
+
+DONE WHEN: The product lead has reviewed each specification and a sample assembled context has been shown.","Approved specifications for the Verification Employee, the mission, the four context layers and the tools master, plus a written recommendation on the agent runtime.","Tech Lead","High","Open","2026-10-13","2026-10-22","8","48","H02","Task","Sprint 1","Sprint 1","T021;T022;T023;T024;T066"
+"H04","High-level plan","UX and screen design","UX and screen design. Includes: Screens for the employee console, mission builder with simulator, campaigns, case timeline, review queue and reports, with empty, error and mobile states.
+
+VISIBLE OUTCOME: Approved screen designs (clickable mockups) for every new screen.
+
+DONE WHEN: The product lead and the programme team have approved the designs.","Approved screen designs (clickable mockups) for every new screen.","Developer A","High","Open","2026-10-20","2026-10-26","5","20","H03","Task","Sprint 1","Sprint 2","T026"
+"H05","High-level plan","Interview questions signed off (English and Hindi)","Interview questions signed off (English and Hindi). Includes: The 34 questions with branching, follow-up probes and confirmation questions, in English and Hindi, written and approved by the programme team.
+
+VISIBLE OUTCOME: One signed-off interview instrument document in English and Hindi, ready to load as a mission.
+
+DONE WHEN: The programme team has signed it in writing. Blocks the pilot.","One signed-off interview instrument document in English and Hindi, ready to load as a mission.","Programme Team","High","Open","2026-10-13","2026-11-09","20","40","","Task","Sprint 1","Sprint 3","T027"
+"H06","High-level plan","Core platform (built)","Core platform (built). Includes: Repository structure, shared contracts, case state machine, audit ledger, Data Store adapter, API, first sign-in, tool gateway, web app, deployment script, tests and the clean-up that made it a live app.
+
+VISIBLE OUTCOME: A live app on Catalyst: sign in, import people, see cases, review queue, audit trail, delete a case.
+
+DONE WHEN: Already live in the development project with 210 automated tests passing.
+
+Progress: 12 of 12 detailed tasks are already done.","A live app on Catalyst: sign in, import people, see cases, review queue, audit trail, delete a case.","Tech Lead","High","Closed","2026-10-09","2026-10-12","2","112","H02","Task","Before Sprint 1","Before Sprint 1","T031;T032;T033;T034;T035;T036;T037;T038;T039;T040;T041;T042"
+"H07","High-level plan","Database: Data Store, indexes, backups and retention","Database: Data Store, indexes, backups and retention. Includes: Indexed lookups, pagination, 10,000-person import, ledger checks at scale, backups and restore, retention and automatic erasure.
+
+VISIBLE OUTCOME: A database that stays fast with 10,000 cases, with scheduled backups, a tested restore and working retention rules.
+
+DONE WHEN: A 10,000-case import and campaign run in seconds per batch, and a restore drill succeeds.","A database that stays fast with 10,000 cases, with scheduled backups, a tested restore and working retention rules.","Tech Lead","High","Open","2026-11-05","2026-12-02","20","94","H06","Task","Sprint 2","Sprint 4","T113;T114;T115;T119;T120;T121"
+"H08","High-level plan","Authentication, tenancy and roles module","Authentication, tenancy and roles module. Includes: Google or Zoho sign-in, user management, per-client data isolation, platform versus client roles, scoped agent credentials, sessions and access audit.
+
+VISIBLE OUTCOME: Staff sign in with a work account, an admin adds users in the app, and two test clients cannot see each other's data.
+
+DONE WHEN: The cross-tenant isolation tests pass in CI.","Staff sign in with a work account, an admin adds users in the app, and two test clients cannot see each other's data.","Developer A","High","Open","2026-10-15","2026-11-30","33","112","H03","Story","Sprint 1","Sprint 4","T095;T096;T097;T098;T099;T101;T102"
+"H09","High-level plan","Missions and campaigns module","Missions and campaigns module. Includes: Missions as versioned data (built), campaigns with pacing and caps (built), scheduler job, scheduled start, reminders and retries, retry of failed first messages.
+
+VISIBLE OUTCOME: An admin creates a mission, imports participants and starts a campaign; first messages go out by themselves every minute with progress, pause and retry visible.
+
+DONE WHEN: A campaign runs without anyone pressing a button and a failed send can be retried from the screen.
+
+Progress: 5 of 9 detailed tasks are already done.","An admin creates a mission, imports participants and starts a campaign; first messages go out by themselves every minute with progress, pause and retry visible.","Developer A","High","In Progress","2026-10-12","2026-11-17","27","68","H06","Story","Before Sprint 1","Sprint 3","T058;T059;T060;T061;T062;T063;T064;T065;T056"
+"H10","High-level plan","Agent 1: Verification Employee (the core agent)","Agent 1: Verification Employee (the core agent). Includes: Versioned employee record, mission assignment, context builder, case digest, tools registry, channel-neutral action tools, guardrail engine, wake mechanism, agent-driven interview loop, decision log, guided and autonomous modes, cost controls and kill switch, reply safety, outcome and escalation rules, tone change control.
+
+VISIBLE OUTCOME: For any case the employee decides the channel and next action, shows its reason in the case history, stays inside consent, hours and cost limits, and can be stopped with one switch.
+
+DONE WHEN: A full interview runs with the agent choosing every step, the evaluation set passes, and a runaway test stops at the limit.","For any case the employee decides the channel and next action, shows its reason in the case history, stays inside consent, hours and cost limits, and can be stopped with one switch.","Developer B","High","Open","2026-10-26","2026-12-21","41","290","H03;H07","Story","Sprint 2","Sprint 6","T067;T068;T069;T070;T071;T072;T073;T074;T075;T076;T077;T078;T079;T080;T081;T084;T085"
+"H11","High-level plan","Agent 2: Interview runner and reply reader (built)","Agent 2: Interview runner and reply reader (built). Includes: Rules-based interview runner with 30 scripted conversations, the optional small reply reader, and the policy for voice notes and images.
+
+VISIBLE OUTCOME: A participant's reply on WhatsApp is understood and the right approved question or answer comes back; the 30-conversation set passes.
+
+DONE WHEN: Already working on real WhatsApp (12 Oct). Remaining: the media-reply policy.
+
+Progress: 2 of 3 detailed tasks are already done.","A participant's reply on WhatsApp is understood and the right approved question or answer comes back; the 30-conversation set passes.","Developer B","Medium","In Progress","2026-10-11","2026-11-26","34","28","H06","Story","Before Sprint 1","Sprint 4","T049;T050;T057"
+"H12","High-level plan","Integrations: WhatsApp and ZoLabs","Integrations: WhatsApp and ZoLabs. Includes: WhatsApp through Interakt (built), template library in English and Hindi, optional Meta Cloud API, delivery monitoring; ZoLabs API test, adapter, call questionnaire, consent script, scheduling, results into evidence, voice-first path, voice quality review and cost tracking.
+
+VISIBLE OUTCOME: A real participant completes a WhatsApp interview and a real ZoLabs call places and returns answers that are saved as evidence.
+
+DONE WHEN: Both channels run on real numbers from the UAT environment and the channel dashboard shows delivery and call results.
+
+Progress: 6 of 18 detailed tasks are already done.","A real participant completes a WhatsApp interview and a real ZoLabs call places and returns answers that are saved as evidence.","Developer B","High","In Progress","2026-10-10","2026-12-14","46","224","H03","Story","Before Sprint 1","Sprint 5","T043;T044;T045;T046;T047;T048;T052;T053;T054;T086;T087;T088;T089;T090;T091;T092;T093;T094"
+"H13","High-level plan","Admin consoles module: employees, missions and simulator","Admin consoles module: employees, missions and simulator. Includes: Employee configuration screens (EdZola staff only), mission builder, mission versions, simulator, campaign screen improvements.
+
+VISIBLE OUTCOME: EdZola staff create an employee and a mission from screens with no JSON, test them in a simulator and publish.
+
+DONE WHEN: The pilot mission is built entirely in the mission builder by a non-technical person.","EdZola staff create an employee and a mission from screens with no JSON, test them in a simulator and publish.","Developer A","High","Open","2026-11-09","2026-12-23","33","134","H04;H08;H10","Story","Sprint 3","Sprint 6","T103;T104;T105;T106;T107"
+"H14","High-level plan","Cases, review and reports module","Cases, review and reports module. Includes: Unified case timeline with the agent's reasons, review queue improvements, funnel and outcome reports with export.
+
+VISIBLE OUTCOME: A reviewer sees one page per case with the full timeline and reasons, and the programme team sees funnel and outcome reports they can export.
+
+DONE WHEN: The programme team confirms the report numbers match their own records.","A reviewer sees one page per case with the full timeline and reasons, and the programme team sees funnel and outcome reports they can export.","Developer A","High","Open","2026-11-26","2026-12-18","17","70","H10","Story","Sprint 4","Sprint 5","T108;T109;T110"
+"H15","High-level plan","Supporting minor modules: alerts, monitoring, notifications, accessibility","Supporting minor modules: alerts, monitoring, notifications, accessibility. Includes: Logging, alerts, operations dashboard, runbooks, uptime checks, support tools, email or Cliq notifications, accessibility and Hindi interface text.
+
+VISIBLE OUTCOME: Alerts reach the right person (paused campaign, failed sends, scheduler down), an operations dashboard and runbooks exist, and the app passes an accessibility check.
+
+DONE WHEN: Each alert has fired once in a test and someone who did not write the runbooks has followed one.","Alerts reach the right person (paused campaign, failed sends, scheduler down), an operations dashboard and runbooks exist, and the app passes an accessibility check.","Developer A","Medium","In Progress","2026-11-09","2026-12-24","34","85","H10","Story","Sprint 3","Sprint 6","T111;T112;T134;T135;T136;T137;T138;T139"
+"H16","High-level plan","Security and compliance","Security and compliance. Includes: Threat model, prompt-injection tests, protection of remaining personal fields, rate limits, dependency scanning, penetration test, privacy and data-residency review, client agreements, incident plan, emergency stop, key drill.
+
+VISIBLE OUTCOME: A penetration-test report with no open high findings, personal data unreadable in a database export, and the pilot client's agreement signed.
+
+DONE WHEN: No high findings are open and the emergency-stop drill has been practised once.","A penetration-test report with no open high findings, personal data unreadable in a database export, and the pilot client's agreement signed.","Tech Lead","High","Open","2026-11-02","2026-12-24","39","116","H08;H10","Task","Sprint 2","Sprint 6","T123;T124;T125;T126;T127;T128;T129;T130;T131;T132;T133"
+"H17","High-level plan","Scale and cost control","Scale and cost control. Includes: Catalyst cost analysis, provider limits handling, load tests at 10,000 cases, validation of the cost model with real usage.
+
+VISIBLE OUTCOME: A measured cost per verified case with a monthly forecast, and a load-test report at 10,000 cases.
+
+DONE WHEN: Provider limits slow a campaign down instead of failing it, and budget alerts exist.","A measured cost per verified case with a monthly forecast, and a load-test report at 10,000 cases.","Tech Lead","High","Open","2026-10-16","2026-12-24","50","44","H07;H10","Task","Sprint 1","Sprint 6","T117;T122;T116;T118"
+"H18","High-level plan","Testing and quality assurance","Testing and quality assurance. Includes: Test plan, automated tests for the new core, end-to-end tests, simulated participants, agent evaluations in CI, real-WhatsApp smoke tests, voice test matrix, Hindi QA, accessibility test, cross-tenant tests, triage process.
+
+VISIBLE OUTCOME: A test report: the automated suite green in CI, agent evaluations above the pass mark, voice and Hindi test matrices passed and the real-WhatsApp checklist signed.
+
+DONE WHEN: A deliberately bad prompt change fails the build, and the report is accepted by the tech lead.","A test report: the automated suite green in CI, agent evaluations above the pass mark, voice and Hindi test matrices passed and the real-WhatsApp checklist signed.","QA Lead","High","Open","2026-10-26","2026-12-28","46","186","H10;H12;H13","Task","Sprint 2","Sprint 6","T140;T141;T142;T082;T083;T143;T144;T145;T146;T147;T100;T148"
+"H19","High-level plan","UAT environment, training and 25-case pilot","UAT environment, training and 25-case pilot. Includes: UAT environment, signed-off mission loaded, pilot templates approved, UAT cases, training, consented pilot cohort, the pilot run, daily review, defect fixing, sign-off, go or no-go.
+
+VISIBLE OUTCOME: The 25-case pilot completes with a pilot report, and the UAT sign-off is signed by the programme team and the product lead.
+
+DONE WHEN: All 25 cases reach a final state or a recorded reason and the go or no-go decision is recorded.","The 25-case pilot completes with a pilot report, and the UAT sign-off is signed by the programme team and the product lead.","Product Lead","High","Open","2026-11-23","2027-01-08","35","163","H05;H12;H13;H18","Story","Sprint 4","Sprint 7","T149;T150;T151;T152;T153;T154;T155;T156;T157;T158;T159"
+"H20","High-level plan","Production readiness and go-live","Production readiness and go-live. Includes: Production project and domain, fresh keys, production number and templates, production data store, removal of testing overrides, go-live checklist, release and rollback plan, smoke test, first live campaign, communication, cutover data rules.
+
+VISIBLE OUTCOME: The production system is live and the first real campaign completes, with testing switches refused at start-up and a rehearsed rollback.
+
+DONE WHEN: The first live cohort completes without a high defect.","The production system is live and the first real campaign completes, with testing switches refused at start-up and a rehearsed rollback.","Tech Lead","High","Open","2026-12-08","2027-01-12","26","55","H19","Task","Sprint 5","Sprint 7","T160;T161;T162;T163;T164;T165;T166;T167;T168;T169"
+"H21","High-level plan","Hypercare and handover","Hypercare and handover. Includes: Two weeks of close monitoring, documentation set, knowledge transfer, retrospective, final cost review, closure sign-off.
+
+VISIBLE OUTCOME: Two weeks without a high defect, a documentation set delivered, the support team handling a mock incident alone, and the closure sign-off signed.
+
+DONE WHEN: The product lead signs the project closure.","Two weeks without a high defect, a documentation set delivered, the support team handling a mock incident alone, and the closure sign-off signed.","Tech Lead","High","Open","2026-12-21","2027-01-28","29","109","H20","Task","Sprint 6","Sprint 8","T170;T171;T172;T173;T174;T175"
+"H22","High-level plan","Roadmap after go-live (next release)","Roadmap after go-live (next release). Includes: Email, SMS, connectors, multi-agent, client self-service, client portal, new missions, more languages. Not in the first release.
+
+VISIBLE OUTCOME: A prioritised, estimated roadmap for the next release, approved by the product lead.
+
+DONE WHEN: The next-release plan is approved. The build of these items is a later project.","A prioritised, estimated roadmap for the next release, approved by the product lead.","Product Lead","Low","Open","2027-01-29","2027-02-15","12","290","H21","Story","Sprint 8","Sprint 10","T176;T177;T178;T179;T180;T181;T182;T183"
+"H23","High-level plan","Wednesday demo: dry configuration","Wednesday demo: dry configuration. Includes: Dry configuration of Catalyst, the cloud agent, tools, ZoLabs and WhatsApp for the demo, a scripted walkthrough and a fallback.
+
+VISIBLE OUTCOME: A working demo on Wednesday: a case runs from import to the review queue with the configured WhatsApp, agent and ZoLabs.
+
+DONE WHEN: One dry run completed and the fallback tested.","A working demo on Wednesday: a case runs from import to the review queue with the configured WhatsApp, agent and ZoLabs.","Tech Lead","High","Open","2026-10-13","2026-10-14","2","8","H02","Task","Sprint 1","Sprint 1","T030"

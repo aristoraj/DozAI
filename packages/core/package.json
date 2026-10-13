@@ -1,0 +1,4 @@
+{ "name": "@dozai/core", "private": true, "version": "0.0.1", "type": "module", "main": "src/index.ts",
+  "scripts": { "test": "vitest run" },
+  "dependencies": { "@dozai/contracts": "*", "@dozai/domain": "*" },
+  "devDependencies": { "vitest": "^3.0.0" } }
