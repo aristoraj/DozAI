@@ -122,3 +122,15 @@ describe.each(stores)("Store contract, controls, timers and memory: %s", (_name,
     expect(await s.listWakes("t1")).toEqual([]);
   });
 });
+
+describe.each(stores)("Store contract, platform secrets: %s", (_name, make) => {
+  it("keeps the latest value, and development clean-up does not remove it", async () => {
+    const s = make();
+    expect(await s.getSecret("zolabs_refresh_token")).toBeUndefined();
+    await s.putSecret("zolabs_refresh_token", "v1");
+    await s.putSecret("zolabs_refresh_token", "v2");
+    expect(await s.getSecret("zolabs_refresh_token")).toBe("v2");
+    await s.purgeAll();
+    expect(await s.getSecret("zolabs_refresh_token")).toBe("v2");
+  });
+});

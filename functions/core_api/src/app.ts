@@ -256,6 +256,53 @@ export function createApp(deps: AppDeps) {
     res.json(await voiceState(svc, t, String(req.params.version)));
   }));
 
+  // The phone channel at a glance: is it connected and allowed to ring, which missions have a published form and whether it is
+  // current, and the calls made so far. Transcripts and audio are personal data, so only reviewers and platform staff see them.
+  app.get("/api/voice", need("read"), wrap(async (req, res) => {
+    const { svc } = req.ctx; const t = req.principal!.tenant_id; const v = deps.voice;
+    const seesTranscripts = CAN.review!.includes(req.principal!.role) || CAN.employee!.includes(req.principal!.role);
+    const forms = [];
+    for (const m of await svc.listMissions(t)) {
+      const s = await voiceState(svc, t, m.version);
+      forms.push({ mission_version: m.version, name: m.name, form_id: s.link?.form_id ?? null, published_at: s.link?.published_at ?? null, published_by: s.link?.published_by ?? null, state: !s.link ? "not_published" : s.in_sync ? "current" : "out_of_date" });
+    }
+    const calls = (await svc.store.listCalls(t)).sort((a, b) => b.requested_at.localeCompare(a.requested_at)).slice(0, 100);
+    const people = new Map<string, string>();
+    for (const k of calls) {
+      if (people.has(k.case_id)) continue;
+      const c = await svc.store.getCase(t, k.case_id); const p = c && (await svc.store.getParticipant(t, c.participant_id));
+      people.set(k.case_id, p?.display_name ?? "—");
+    }
+    res.json({
+      kind: v?.port.kind ?? "off", calls_enabled: v?.cfg.callsEnabled ?? false,
+      who_can_be_called: !v ? "nobody" : v.cfg.allowAll ? "anyone with consent" : `${(v.cfg.allowlist ?? []).length} numbers on the allowlist`,
+      callback_ready: !!v?.callbackUrl, can_check: CAN.employee!.includes(req.principal!.role), forms,
+      calls: calls.map(k => ({ communication_id: k.communication_id, case_id: k.case_id, person: people.get(k.case_id), status: k.status, requested_at: k.requested_at, scheduled_for: k.scheduled_for ?? null, ended_at: k.ended_at ?? null, duration_seconds: k.duration_seconds ?? null, asked: k.asked, reason: k.reason ?? null, has_audio: !!(k.recording || k.audio_url), has_transcript: !!k.transcript, audio_url: seesTranscripts ? (k.recording ? `/calls/${k.communication_id}/recording` : k.audio_url ?? null) : null, transcript: seesTranscripts ? k.transcript ?? null : null })),
+    });
+  }));
+
+  // A call's recording, streamed from ZoLabs with our own sign-in. Reviewers and platform staff only. Nothing is copied or stored here,
+  // and the recording is reachable only while the call record exists, so deleting the case removes our way to it.
+  app.get("/api/calls/:id/recording", need("read"), wrap(async (req, res) => {
+    const role = req.principal!.role;
+    if (!CAN.review!.includes(role) && !CAN.employee!.includes(role)) throw new DozaiError("FORBIDDEN", `${role} cannot listen to recordings`, 403);
+    const v = deps.voice; const t = req.principal!.tenant_id;
+    if (!v) throw new DozaiError("VOICE_NOT_CONFIGURED", "phone calls are not switched on for this platform", 503);
+    const call = await req.ctx.svc.store.getCall(t, String(req.params.id));
+    if (!call || !call.recording) throw new DozaiError("NOT_FOUND", "there is no recording for this call", 404);
+    const rec = await v.port.fetchRecording(call.communication_id);
+    if (!rec) throw new DozaiError("NOT_FOUND", "the provider has no recording for this call", 404);
+    res.set({ "content-type": rec.contentType, "content-length": String(rec.data.length), "cache-control": "private, no-store" }).send(rec.data);
+  }));
+
+  // Proves the connection works: asks the provider who we are signed in as. Places no call and costs nothing.
+  app.post("/api/voice/check", need("employee"), wrap(async (req, res) => {
+    const v = deps.voice;
+    if (!v) throw new DozaiError("VOICE_NOT_CONFIGURED", "phone calls are not switched on for this platform", 503);
+    try { res.json({ ok: true, kind: v.port.kind, account: await v.port.whoami() }); }
+    catch (e) { res.json({ ok: false, kind: v.port.kind, error: (e as Error).message.slice(0, 300) }); }
+  }));
+
   // Simulator only: finish the latest call on a case the way you choose, then apply it exactly as a real result would be.
   app.post("/api/cases/:id/simulate-call", need("run"), wrap(async (req, res) => {
     const v = deps.voice;
@@ -422,7 +469,7 @@ export function createApp(deps: AppDeps) {
     const need = evaluateRequirements(await svc.getMission(t, c.mission_version), evidence, person?.recorded_employer);
     // Transcripts are personal data: only people who review cases or manage the platform see them.
     const seesTranscripts = CAN.review!.includes(req.principal!.role) || CAN.employee!.includes(req.principal!.role);
-    const calls = (await svc.store.listCalls(t, id)).sort((a, b) => a.requested_at.localeCompare(b.requested_at)).map(k => ({ communication_id: k.communication_id, status: k.status, requested_at: k.requested_at, scheduled_for: k.scheduled_for ?? null, ended_at: k.ended_at ?? null, duration_seconds: k.duration_seconds ?? null, asked: k.asked, reason: k.reason ?? null, audio_url: seesTranscripts ? k.audio_url ?? null : null, transcript: seesTranscripts ? k.transcript ?? null : null }));
+    const calls = (await svc.store.listCalls(t, id)).sort((a, b) => a.requested_at.localeCompare(b.requested_at)).map(k => ({ communication_id: k.communication_id, status: k.status, requested_at: k.requested_at, scheduled_for: k.scheduled_for ?? null, ended_at: k.ended_at ?? null, duration_seconds: k.duration_seconds ?? null, asked: k.asked, reason: k.reason ?? null, audio_url: seesTranscripts ? (k.recording ? `/calls/${k.communication_id}/recording` : k.audio_url ?? null) : null, transcript: seesTranscripts ? k.transcript ?? null : null }));
     res.json({
       calls, case: view, events: (await svc.store.listEvents(t, id)).map(auditView), evidence, decisions: await svc.store.listDecisions(id),
       // What the mission needs to know about this person and how much of it is settled. Labels and states only; answers stay in `evidence`.

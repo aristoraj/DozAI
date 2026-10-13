@@ -269,6 +269,9 @@ export class DocStore implements Store {
   async listWakes(t: string, caseId?: string) { return (await this.latestByDoc({ tenant_id: t, collection: "wake", parent_id: caseId })).map(r => JSON.parse(r.body) as WakeRequest).sort((a, b) => a.at.localeCompare(b.at)); }
   async getMemory(t: string, caseId: string) { return this.parse<CaseMemory>((await this.d.select({ tenant_id: t, collection: "memory", doc_id: caseId, latestOnly: true }))[0]); }
   async putMemory(m: CaseMemory) { await this.putVersioned("memory", m.tenant_id, m.case_id, "-", m); }
+  // Secrets belong to the platform, are never cleared with development data, and are stored already encrypted.
+  async getSecret(name: string) { return this.parse<{ v: string }>((await this.d.select({ tenant_id: PLATFORM_TENANT, collection: "secret", doc_id: name, latestOnly: true }))[0])?.v; }
+  async putSecret(name: string, value: string) { await this.putVersioned("secret", PLATFORM_TENANT, name, "-", { v: value }); }
 }
 
 /** Keep trace payloads small enough for one row. */

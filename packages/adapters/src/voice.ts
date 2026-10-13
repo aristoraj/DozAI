@@ -22,6 +22,10 @@ export interface VoicePort {
   endCall(communicationId: string): Promise<void>;
   /** The call's data as the provider holds it now, or null when it cannot be found. */
   fetchResult(communicationId: string): Promise<VoiceResult | null>;
+  /** Who the connection is signed in as. A cheap way to prove the connection works. */
+  whoami(): Promise<Record<string, unknown> | string>;
+  /** The call's recording, streamed from the provider on demand, or null when there is none. Nothing is stored on our side. */
+  fetchRecording(communicationId: string): Promise<{ data: Buffer; contentType: string } | null>;
 }
 
 // ---- the simulator twin ------------------------------------------------------------------------------------------------
@@ -50,12 +54,17 @@ export class FakeVoice implements VoicePort {
     this.calls.push({ communication_id, ...i });
     return { communication_id };
   }
+  /** Recordings a test has put there, by communication id. */
+  recordings = new Map<string, Buffer>();
+  async fetchRecording(id: string) { const data = this.recordings.get(id); return data ? { data, contentType: "audio/mpeg" } : null; }
+  async whoami() { return { account: "simulator" }; }
   async endCall(id: string) { const c = this.calls.find(x => x.communication_id === id); if (c) c.ended = true; }
   async fetchResult(id: string) { return this.results.get(id) ?? null; }
 
   /** Script how a call ended. Defaults to a person who agreed, confirmed who they are, and answered nothing yet. */
   complete(communicationId: string, over: Partial<VoiceResult> = {}): VoiceResult {
-    const r: VoiceResult = { communication_id: communicationId, status: "completed", answers: {}, consent_given: true, identity_confirmed: true, language: "en", audio_url: `https://example.invalid/audio/${communicationId}.mp3`, transcript: "Simulated call.", duration_seconds: 120, ...over };
+    const r: VoiceResult = { communication_id: communicationId, status: "completed", answers: {}, consent_given: true, identity_confirmed: true, language: "en", has_recording: true, transcript: "Simulated call.", duration_seconds: 120, ...over };
+    if (r.has_recording && !this.recordings.has(communicationId)) this.recordings.set(communicationId, Buffer.from("ID3 simulated recording")); // a stand-in for audio
     this.results.set(communicationId, r);
     return r;
   }
@@ -70,11 +79,12 @@ export interface McpCaller { callTool(name: string, args: Record<string, unknown
  * A fresh connection per call, so nothing is held between invocations of a serverless function. The access token is a
  * secret and is only ever sent as a Bearer header.
  */
-export function mcpOverHttp(url: string, token: string): McpCaller {
+export function mcpOverHttp(url: string, token: string | { token(): Promise<string> }): McpCaller {
   return {
     async callTool(name, args) {
       const client = new Client({ name: "dozai", version: "0.1.0" });
-      const transport = new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers: { Authorization: `Bearer ${token}` } } });
+      const bearer = typeof token === "string" ? token : await token.token(); // a renewing token is asked for fresh on every call
+      const transport = new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers: { Authorization: `Bearer ${bearer}` } } });
       try {
         await client.connect(transport);
         const res = (await client.callTool({ name, arguments: args })) as { isError?: boolean; content?: { type: string; text?: string }[] };
@@ -139,15 +149,34 @@ export function parseZolabsCommunication(raw: unknown): VoiceResult | null {
     ...(consent !== undefined ? { consent_given: consent } : {}), ...(identity !== undefined ? { identity_confirmed: identity } : {}),
     language: typeof answers.language === "string" ? answers.language : undefined,
     audio_url: (pick(raw, "audio_url", "recording_url", "audio") as string | undefined) ?? null,
+    // The service keeps the recording of a finished call and serves it from /communications/<id>/recording.
+    ...(status === "completed" && /^\d+$/.test(id) ? { has_recording: true } : {}),
     transcript: (pick(raw, "transcript", "transcript_text", "text") as string | undefined) ?? (typeof (raw as { collected_answers?: unknown } | null)?.collected_answers === "string" ? ((raw as { collected_answers: string }).collected_answers || null) : null),
     duration_seconds: Number.isFinite(duration) && duration > 0 ? duration : null,
     ended_at: endedAt ? `${endedAt}Z` : asId(pick(raw, "ended_at", "completed_at", "end_time")),
   };
 }
 
+/** Plain GET requests to the provider's own web address (recordings are fetched this way, not through the tool connection). */
+export type RestGet = (path: string) => Promise<Response>;
+export function restOverHttp(baseUrl: string, token: string | { token(): Promise<string> }): RestGet {
+  return async path => {
+    const bearer = typeof token === "string" ? token : await token.token();
+    return fetch(`${baseUrl.replace(/\/$/, "")}${path}`, { headers: { Authorization: `Bearer ${bearer}` }, signal: AbortSignal.timeout(60_000) });
+  };
+}
+
 export class ZolabsVoice implements VoicePort {
   readonly kind = "zolabs" as const;
-  constructor(private mcp: McpCaller) {}
+  constructor(private mcp: McpCaller, private rest?: RestGet) {}
+
+  async fetchRecording(id: string) {
+    if (!this.rest || !/^\d+$/.test(id)) return null;
+    const res = await this.rest(`/communications/${id}/recording`);
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`the provider answered ${res.status} for the recording`);
+    return { data: Buffer.from(await res.arrayBuffer()), contentType: res.headers.get("content-type") ?? "audio/mpeg" };
+  }
 
   async publishForm(def: VoiceFormDefinition, o: { existingFormId?: number; callbackUrl?: string }) {
     let id = o.existingFormId;
@@ -177,6 +206,7 @@ export class ZolabsVoice implements VoicePort {
     // Retries are decided by our own rules, so the provider is asked for exactly one attempt.
     return { communication_id: this.callId(await this.mcp.callTool("schedule_phone_call", { phone_number: i.phone, form_id: i.form_id, communication_context: i.context, schedule_date_time: i.at, attempts: 1, interval_minutes: 1440, confirmed: true })) };
   }
+  async whoami() { return (await this.mcp.callTool("whoami", {})) as Record<string, unknown> | string; }
   async endCall(id: string) { await this.mcp.callTool("end_phone_call", { communication_id: Number(id), confirmed: true }); }
 
   async fetchResult(id: string): Promise<VoiceResult | null> {

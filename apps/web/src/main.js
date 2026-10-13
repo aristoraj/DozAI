@@ -12,7 +12,7 @@ const state = {
   missions: [], defaultMission: null, missionShown: null, campaigns: [],
   employees: [], employeeCanEdit: false, employeeShown: null, employeeDef: null, ctxPreview: null,
   voiceForm: null, voiceFormFor: null,
-  approvals: [], approvalsWaiting: 0, controlsInfo: null, replay: null,
+  approvals: [], approvalsWaiting: 0, controlsInfo: null, replay: null, voice: null, voiceCheck: null,
   loaded: false, error: null,
   caseFilter: "all", caseSearch: "", reviewSelected: null,
   agentTab: "agent", session: null, auditSearch: "", auditActor: "all",
@@ -70,8 +70,8 @@ async function loadAll() {
   try {
     // Configuration can change between deploys, so re-read it each time instead of trusting a stale tab.
     [state.me, state.mission] = await Promise.all([api("/me"), api("/mission")]);
-    const [c, a, s, ss, ms, cp, em, ap, co] = await Promise.all([api("/cases"), api("/audit?limit=300"), api("/summary"), api("/sessions"), api("/missions"), api("/campaigns"), api("/employees"), api("/approvals"), api("/controls")]);
-    Object.assign(state, { cases: c.cases, audits: a.events.map(withIst), summary: s, sessions: ss.sessions, missions: ms.missions, defaultMission: ms.default_version, campaigns: cp.campaigns, employees: em.employees, employeeCanEdit: em.can_edit, approvals: ap.approvals, approvalsWaiting: ap.waiting, controlsInfo: co, error: null, loaded: true });
+    const [c, a, s, ss, ms, cp, em, ap, co, vo] = await Promise.all([api("/cases"), api("/audit?limit=300"), api("/summary"), api("/sessions"), api("/missions"), api("/campaigns"), api("/employees"), api("/approvals"), api("/controls"), api("/voice")]);
+    Object.assign(state, { cases: c.cases, audits: a.events.map(withIst), summary: s, sessions: ss.sessions, missions: ms.missions, defaultMission: ms.default_version, campaigns: cp.campaigns, employees: em.employees, employeeCanEdit: em.can_edit, approvals: ap.approvals, approvalsWaiting: ap.waiting, controlsInfo: co, voice: vo, error: null, loaded: true });
     if (state.missionShown && !state.missions.some(m => m.version === state.missionShown.version)) state.missionShown = null;
   } catch (e) {
     state.error = e.message; state.loaded = true;
@@ -114,7 +114,7 @@ const empty = (title, text, action = "") => `<div class="empty-state"><h3>${esc(
 function render() {
   if (!state.loaded) { appView.innerHTML = `<div class="view-enter">${empty("Loading…", "Reading the latest data.")}</div>`; return; }
   if (state.error) { appView.innerHTML = `<div class="view-enter">${empty("Could not load data", state.error, `<button class="button primary" data-action="refresh">Try again</button>`)}</div>`; bind(); return; }
-  const views = { overview: renderOverview, cases: renderCases, campaigns: renderCampaigns, reviews: renderReviews, agent: renderAgent, approvals: renderApprovals, missions: renderMission, audit: renderAudit };
+  const views = { overview: renderOverview, cases: renderCases, campaigns: renderCampaigns, reviews: renderReviews, agent: renderAgent, approvals: renderApprovals, calls: renderCalls, missions: renderMission, audit: renderAudit };
   const off = state.controlsInfo?.controls.paused ? `<div class="agent-callout" style="border-color:#b64b48;margin-bottom:14px"><small>Switched off</small><h3>Nothing is being sent or placed, and the agent is not being woken.</h3><p>Open Claude engine, then Controls, to switch it back on.</p></div>` : "";
   appView.innerHTML = `<div class="view-enter">${off}${views[state.view]()}</div>`;
   bind();
@@ -405,7 +405,7 @@ function callsHtml(calls) {
   const sim = state.me?.voice === "simulated" && live && can("run");
   const list = (calls || []).map(k => `<div style="border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin:6px 0;font-size:12px"><strong>${esc(CALL_LABEL[k.status] || k.status)}</strong> <small style="color:var(--muted)">· requested ${esc(istDay(k.requested_at))} ${esc(istTime(k.requested_at))}${k.scheduled_for ? " for " + esc(istDay(k.scheduled_for)) + " " + esc(istTime(k.scheduled_for)) : ""}${k.duration_seconds ? " · " + Math.max(1, Math.round(k.duration_seconds / 60)) + " min" : ""}</small>
       ${k.reason ? `<div style="color:var(--muted)">Why: ${esc(k.reason)}</div>` : ""}${k.asked?.length ? `<div style="color:var(--muted)">Asked for: ${esc(k.asked.join(", "))}</div>` : ""}
-      ${k.audio_url ? `<div><a href="${esc(k.audio_url)}" target="_blank" rel="noopener noreferrer">Listen to the recording</a></div>` : ""}
+      ${k.audio_url ? `<div><audio controls preload="none" src="${esc(recordingSrc(k.audio_url))}" style="max-width:100%"></audio></div>` : ""}
       ${k.transcript ? `<details><summary style="cursor:pointer">Transcript</summary><pre style="white-space:pre-wrap;font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;margin:6px 0 0">${esc(k.transcript)}</pre></details>` : ""}</div>`).join("");
   const buttons = sim ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><small style="width:100%;color:var(--muted)">Simulator: finish the call yourself</small><button class="button primary small" data-simcall="answered">Answered</button><button class="button ghost small" data-simcall="no_answer">No answer</button><button class="button ghost small" data-simcall="refused">Refused</button><button class="button ghost small" data-simcall="wrong_person">Wrong person</button></div>` : "";
   return (list || `<p style="color:var(--muted);font-size:12px">No phone calls on this case. The agent can ask for one when WhatsApp is not enough.</p>`) + buttons;
@@ -484,6 +484,47 @@ async function decide(id, decision) {
   if (!c) return;
   const note = $("reviewNotes")?.value.trim() ?? "";
   await act(() => api(`/cases/${id}/review`, { method: "POST", body: { decision, note, expected_version: c.version } }), "Decision recorded in the audit trail");
+}
+
+// ---- phone calls (ZoLabs): connection, forms and the calls made ---------------------------------------------------------------------------
+const CALL_STATUS = { scheduled: ["progress", "Scheduled"], in_progress: ["progress", "In progress"], completed: ["confirmed", "Completed"], no_answer: ["review", "No answer"], busy: ["review", "Busy"], declined: ["not-confirmed", "Declined"], failed: ["not-confirmed", "Failed"] };
+const FORM_STATE = { current: ["confirmed", "Published and current"], out_of_date: ["review", "Out of date"], not_published: ["not-started", "Not published"] };
+const callPill = s => { const [cls, label] = CALL_STATUS[s] || ["progress", String(s).replace(/_/g, " ")]; return `<span class="status ${cls}">${esc(label)}</span>`; };
+// A recording we stream ourselves comes as a path on this server; one from another provider is a full link.
+const recordingSrc = u => (u.startsWith("/") ? `${API_BASE}${u}` : u);
+const mmss = s => (s == null ? "—" : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`);
+
+function renderCalls() {
+  const v = state.voice;
+  if (!v) return empty("Loading phone calls…", "Reading the connection and the calls.");
+  const kind = { zolabs: "ZoLabs, live", simulated: "Simulator: nobody is rung", off: "Not connected" }[v.kind] || v.kind;
+  const chk = state.voiceCheck;
+  const checkNote = chk ? (chk.ok ? `<p style="font-size:12px;margin:8px 0;color:var(--sys)">Connected. Signed in as ${esc(typeof chk.account === "string" ? chk.account : chk.account?.email || chk.account?.name || chk.account?.account || JSON.stringify(chk.account).slice(0, 120))}.</p>` : `<p style="font-size:12px;margin:8px 0;color:#b64b48">Could not connect: ${esc(chk.error)}</p>`) : "";
+  const forms = v.forms.map(f => `<tr><td><strong>${esc(f.name)}</strong><small style="display:block;color:var(--muted)">${esc(f.mission_version)}</small></td><td>${f.form_id ? esc(f.form_id) : "—"}</td><td><span class="status ${FORM_STATE[f.state][0]}">${esc(FORM_STATE[f.state][1])}</span></td><td style="font-size:12px">${f.published_at ? `${esc(istDay(f.published_at))} ${esc(istTime(f.published_at))}<small style="display:block;color:var(--muted)">${esc(f.published_by || "")}</small>` : "—"}</td></tr>`).join("");
+  const calls = v.calls.map(k => `<tr><td>${esc(istDay(k.requested_at))} ${esc(istTime(k.requested_at))}${k.scheduled_for ? `<small style="display:block;color:var(--muted)">for ${esc(istDay(k.scheduled_for))} ${esc(istTime(k.scheduled_for))}</small>` : ""}</td>
+    <td><button style="background:none;border:0;padding:0;cursor:pointer;color:inherit;font:inherit;text-align:left" data-case="${esc(k.case_id)}"><strong>${esc(k.person)}</strong></button><small style="display:block;color:var(--muted)">${esc(k.case_id)}</small></td>
+    <td>${callPill(k.status)}</td><td>${esc(mmss(k.duration_seconds))}</td>
+    <td style="font-size:12px">${k.asked?.length ? esc(k.asked.join(", ").replace(/_/g, " ")) : "everything"}${k.reason ? `<small style="display:block;color:var(--muted)">${esc(k.reason)}</small>` : ""}</td>
+    <td style="font-size:12px">${k.audio_url ? `<audio controls preload="none" src="${esc(recordingSrc(k.audio_url))}" style="max-width:200px"></audio>` : k.has_audio ? `<small style="color:var(--muted)">Recording kept. Reviewers can play it.</small>` : `<small style="color:var(--muted)">No recording</small>`}${k.transcript ? `<details><summary style="cursor:pointer">Transcript</summary><pre style="white-space:pre-wrap;font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;margin:6px 0 0">${esc(k.transcript)}</pre></details>` : k.has_transcript ? `<small style="display:block;color:var(--muted)">Transcript kept. Reviewers can read it.</small>` : ""}</td></tr>`).join("");
+  return `${pageHead("Phone calls", "How the voice agent reaches people.", "The platform asks for a call, a person approves it, and ZoLabs places it. Here is the connection, the form each mission uses, and every call made.")}
+    <div class="agent-layout">
+      <section class="card config-section"><div class="card-head"><div><h2>Connection</h2><p>What is switched on</p></div><span class="status ${v.kind === "zolabs" ? "confirmed" : v.kind === "simulated" ? "progress" : "not-started"}">${esc(kind)}</span></div>
+        <div class="config-list">
+          ${configRow("Calls", v.calls_enabled ? "Switched on" : "Switched off", v.calls_enabled ? "Approved calls are placed by the scheduler." : "Nothing will ring, even when a call is approved.")}
+          ${configRow("Who can be called", v.who_can_be_called, "Only people who have not opted out, inside the contact hours.")}
+          ${configRow("Finished calls", v.callback_ready ? "ZoLabs rings us back" : "Found by the scheduler", v.callback_ready ? "ZoLabs tells us the moment a call finishes, and we fetch the details ourselves." : "No callback address is set, so results are picked up when the scheduler runs.")}
+        </div>
+        ${checkNote}
+        ${v.can_check && v.kind !== "off" ? `<button class="button ghost small" data-action="voice-check">Check connection</button><small style="display:block;color:var(--muted);font-size:10px;margin-top:6px">Asks ZoLabs who we are signed in as. Places no call and costs nothing.</small>` : ""}</section>
+      <aside class="card config-section"><div class="card-head"><div><h2>Phone forms</h2><p>One per mission</p></div></div>
+        <div style="overflow-x:auto"><table class="data-table"><thead><tr><th>Mission</th><th>Form</th><th>State</th><th>Published</th></tr></thead><tbody>${forms}</tbody></table></div>
+        <div style="margin-top:10px"><button class="button ghost small" data-go="missions">Open a mission to preview or publish</button></div></aside></div>
+    <section class="card card-pad" style="margin-top:15px"><div class="card-head"><div><h2>Calls</h2><p>Most recent first. Recordings and transcripts are shown to reviewers and platform staff only.</p></div><span class="status active">${v.calls.length}</span></div>
+      ${v.calls.length ? `<div style="overflow-x:auto"><table class="data-table"><thead><tr><th>Requested</th><th>Person</th><th>Result</th><th>Length</th><th>What it asked</th><th>Recording</th></tr></thead><tbody>${calls}</tbody></table></div>` : empty("No calls yet", "When the agent asks for a call and a person approves it, it appears here.")}</section>`;
+}
+async function checkVoice() {
+  try { state.voiceCheck = await api("/voice/check", { method: "POST" }); render(); toast(state.voiceCheck.ok ? "Connected to ZoLabs." : "Could not connect to ZoLabs.", state.voiceCheck.ok ? "success" : "warning"); }
+  catch (e) { toast(e.message, "warning"); }
 }
 
 // ---- approvals and controls: a person's say over what the agent does -------------------------------------------------------------------
@@ -908,6 +949,7 @@ function action(name) {
       toast(`${plural(queued, "first message")} queued, ${r.sent} sent.${r.paused.length ? ` ${plural(r.paused.length, "campaign")} paused: ${r.paused[0].reason}` : ""}`, r.paused.length ? "warning" : "success");
     });
   }
+  if (name === "voice-check") checkVoice();
   if (name === "close-session") { state.session = null; state.replay = null; render(); }
   if (name === "pause-platform") confirmModal({ title: "Switch everything off?", text: "No message will be sent, no call placed, no campaign queued and the agent will not be woken until you switch it back on. Replies are still recorded.", button: "Switch everything off", onConfirm: () => saveControls({ paused: true, reason: "Switched off from the console" }, "Everything is switched off.") });
   if (name === "resume-platform") confirmModal({ title: "Switch back on?", text: "Queued messages and calls go out on the next scheduler pass, and timers that came due are acted on. Check the queue first if something wrong was going out.", button: "Switch back on", onConfirm: () => saveControls({ paused: false }, "Back on.") });

@@ -321,7 +321,7 @@ describe("phone calls over the API", () => {
     await call("POST", `/cases/${id}/simulate-call`, { outcome: "answered", answers: { work_status: "same_job" }, transcript: "Asha said she works at Acme." });
     const calls = async (role: string) => (await call("GET", `/cases/${id}`, undefined, role)).json.calls[0];
     expect((await calls("reviewer")).transcript).toContain("Asha said");
-    expect((await calls("agent_ops")).audio_url).toContain("example.invalid");
+    expect((await calls("agent_ops")).audio_url).toMatch(new RegExp("^\/calls\/.+\/recording$")); // streamed by us, never a link to the provider
     expect(await calls("operator")).toMatchObject({ transcript: null, audio_url: null });
   });
 
@@ -521,5 +521,85 @@ describe("approvals, controls and replay over the API", () => {
     expect(r).toMatchObject({ session_id: "s-api", trigger: "resume" });
     expect(r.rows).toEqual([expect.objectContaining({ tool: "memory_note", recorded: "executed", now: "allowed", changed: false })]);
     expect((await call("GET", "/sessions/nope/replay")).status).toBe(404);
+  });
+});
+
+describe("the phone channel at a glance, over the API", () => {
+  function withVoiceOn() {
+    const port = new FakeVoice();
+    const t = start({ voice: { port, cfg: { piiKey: KEY, allowAll: true, callsEnabled: true }, tenant: DEMO_TENANT, callbackUrl: "https://dozai.example/api/webhooks/zolabs/x" } });
+    t.svc.voiceEnabled = true;
+    return { ...t, port };
+  }
+
+  it("shows the connection, a form per mission and whether it is current", async () => {
+    const { call } = withVoiceOn();
+    const v = (await call("GET", "/voice")).json;
+    expect(v).toMatchObject({ kind: "simulated", calls_enabled: true, who_can_be_called: "anyone with consent", callback_ready: true, can_check: true });
+    expect(v.forms).toEqual([expect.objectContaining({ mission_version: "MSN-001-v1.3", state: "not_published", form_id: null })]);
+    await call("POST", "/missions/MSN-001-v1.3/voice-form/publish", { confirm: true }, "agent_ops");
+    expect((await call("GET", "/voice")).json.forms[0]).toMatchObject({ state: "current", form_id: 901, published_by: "agent_ops:dev-user" });
+  });
+
+  it("says nobody can be called when the provider is not configured", async () => {
+    const { call } = start();
+    expect((await call("GET", "/voice")).json).toMatchObject({ kind: "off", calls_enabled: false, who_can_be_called: "nobody" });
+    expect((await call("POST", "/voice/check", {})).status).toBe(503);
+  });
+
+  it("checks the connection without placing a call, and only for platform staff", async () => {
+    const { call, port } = withVoiceOn();
+    expect((await call("POST", "/voice/check", {}, "operator")).status).toBe(403);
+    expect((await call("POST", "/voice/check", {}, "agent_ops")).json).toMatchObject({ ok: true, kind: "simulated", account: { account: "simulator" } });
+    expect(port.calls).toHaveLength(0);
+  });
+
+  it("reports a failed check as a plain message, not a crash", async () => {
+    const { call, port } = withVoiceOn();
+    port.whoami = async () => { throw new Error("The ZoLabs sign-in could not be renewed (invalid_grant)."); };
+    expect((await call("POST", "/voice/check", {})).json).toMatchObject({ ok: false, error: expect.stringContaining("could not be renewed") });
+  });
+
+  it("lists the calls made, with the person, and keeps recordings and transcripts from people who should not see them", async () => {
+    const { call, svc } = withVoiceOn();
+    const r = await call("POST", "/participants/import", { rows: [row], consent_attested: true });
+    const id = r.json.created[0].case_id as string;
+    await svc.store.putCall({ communication_id: "c-1", tenant_id: DEMO_TENANT, case_id: id, form_id: 901, status: "completed", requested_at: "2026-10-12T10:00:00.000Z", ended_at: "2026-10-12T10:03:00.000Z", duration_seconds: 180, asked: ["work_status"], reason: "No reply for two days.", audio_url: "https://audio.example/c-1.mp3", transcript: "Meera: hello" });
+    const reviewer = (await call("GET", "/voice", undefined, "reviewer")).json.calls[0];
+    expect(reviewer).toMatchObject({ communication_id: "c-1", person: "Ravi Test", status: "completed", duration_seconds: 180, audio_url: "https://audio.example/c-1.mp3", transcript: "Meera: hello" });
+    const operator = (await call("GET", "/voice", undefined, "operator")).json.calls[0];
+    expect(operator).toMatchObject({ has_audio: true, has_transcript: true, audio_url: null, transcript: null });
+    expect(JSON.stringify(await call("GET", "/voice", undefined, "operator"))).not.toContain("hello");
+  });
+});
+
+describe("listening to a recording", () => {
+  async function withRecording() {
+    const port = new FakeVoice();
+    const t = start({ voice: { port, cfg: { piiKey: KEY, allowAll: true, callsEnabled: true }, tenant: DEMO_TENANT } });
+    const r = await t.call("POST", "/participants/import", { rows: [row], consent_attested: true });
+    const id = r.json.created[0].case_id as string;
+    await t.svc.store.putCall({ communication_id: "c-9", tenant_id: DEMO_TENANT, case_id: id, form_id: 901, status: "completed", requested_at: "2026-10-12T10:00:00.000Z", asked: [], recording: true });
+    port.recordings.set("c-9", Buffer.from("AUDIO-BYTES"));
+    return { ...t, port, base: `` };
+  }
+  const get = async (call: Awaited<ReturnType<typeof withRecording>>["call"], path: string, role: string) => {
+    const r = await call("GET", path, undefined, role);
+    return r;
+  };
+
+  it("is streamed from the provider to reviewers and platform staff, and to nobody else", async () => {
+    const { call } = await withRecording();
+    expect((await get(call, "/calls/c-9/recording", "operator")).status).toBe(403);
+    expect((await get(call, "/calls/nope/recording", "reviewer")).status).toBe(404);
+    expect((await get(call, "/calls/c-9/recording", "reviewer")).status).toBe(200); // body is audio, not JSON
+  });
+
+  it("is not available once the call record is gone, so deleting a case closes our way to the audio", async () => {
+    const { call, svc } = await withRecording();
+    const id = (await call("GET", "/cases")).json.cases[0].id as string;
+    await call("POST", `/cases/${id}/delete`, { confirm: id, reason_code: "participant_request" }, "admin");
+    expect((await svc.store.getCall(DEMO_TENANT, "c-9"))).toBeUndefined();
+    expect((await get(call, "/calls/c-9/recording", "reviewer")).status).toBe(404);
   });
 });

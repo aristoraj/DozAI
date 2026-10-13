@@ -84,3 +84,14 @@ The callback address is `DOZAI_PUBLIC_URL/api/webhooks/zolabs/<ZOLABS_WEBHOOK_SE
 ## Not built yet
 
 Reminders and retry rules for calls (the platform currently allows the agent to ask again within the shared attempt limit); the autonomy dial (calls will start as "approve first" in step 4); the voice-first path for people who are not on WhatsApp; quality review of calls; cost tracking per call; a Hindi test matrix.
+
+
+## Staying signed in, the Phone calls page, and what is still open (13 October 2026)
+
+**Signing in.** ZoLabs signs people in with OAuth, so there is no API key. Run `node scripts/zolabs-login.mjs` once: it opens ZoLabs in the browser, you sign in with the account calls should be made as, and it saves `ZOLABS_CLIENT_ID` and `ZOLABS_REFRESH_TOKEN` to `.env.local` (not in git). Then `node scripts/deploy.mjs --only functions`. From then on the server renews its own access tokens (`RefreshingToken`). If ZoLabs ever issues a newer refresh token, the newest is kept in the database, encrypted with the PII key, so every copy of the server uses the same one. If the sign-in is ever revoked, repeat the steps above.
+
+**The Phone calls page** shows the connection (live, simulated or off), whether calls are switched on and who can be called, a **Check connection** button (asks ZoLabs who we are signed in as; no call, no cost), the phone form for each mission and whether it is current, and every call with its result, length, what it asked, and (for reviewers and platform staff) the recording and transcript.
+
+**The form generator** now also tells the voice agent that a short "yes", "haan", "ji" or "okay" is a clear yes, never to ask a question again once it was answered, and to go back over its fields before ending so none that applies is skipped. Check this on the next real call.
+
+**Still open with ZoLabs:** where the recording link lives (records carry none today), the real callback payload and whether it is signed, a delete route for data held at ZoLabs, costs and limits, and the production host. **Still to build here:** confirming an unclear call result on WhatsApp.

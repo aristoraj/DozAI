@@ -302,7 +302,7 @@ describe("the live app", () => {
     click(q('[data-simcall="answered"]'));
     await wait(() => document.getElementById("callBox")!.textContent!.includes("Completed"), "call completed", 6000);
     expect(document.getElementById("callBox")!.textContent).toContain("Transcript");
-    expect(document.getElementById("callBox")!.textContent).toContain("Listen to the recording");
+    expect(document.getElementById("callBox")!.querySelector("audio")?.getAttribute("src")).toMatch(new RegExp("\/calls\/.+\/recording$"));
     await wait(() => document.getElementById("reqBox")!.textContent!.includes("Employer"), "evidence checklist");
     expect(document.getElementById("reqBox")!.textContent).toContain("Said by the participant");
   });
@@ -316,8 +316,9 @@ describe("the live app", () => {
     const sel = q("[data-dial=\"voice_call\"]") as HTMLSelectElement;
     expect(sel.value).toBe("approve_first");
     sel.value = "automatic"; sel.dispatchEvent(new Event("change", { bubbles: true }));
-    await wait(() => (q("[data-dial=\"voice_call\"]") as HTMLSelectElement | null)?.value === "automatic", "dial saved");
-    expect((await (await fetch(base + "/api/controls", { headers: { "x-dozai-role": "admin" } })).json()).controls.autonomy.voice_call).toBe("automatic");
+    let saved = "";
+    for (let i = 0; i < 100 && saved !== "automatic"; i++) { saved = (await (await fetch(base + "/api/controls", { headers: { "x-dozai-role": "admin" } })).json()).controls.autonomy.voice_call; if (saved !== "automatic") await new Promise(r => setTimeout(r, 20)); }
+    expect(saved).toBe("automatic"); // saved on the server, not just shown in the page
 
     click(q("[data-action=\"pause-platform\"]"));
     await wait(() => !!document.getElementById("okConfirm"), "confirmation");
@@ -328,6 +329,17 @@ describe("the live app", () => {
     await wait(() => !!document.getElementById("okConfirm"), "confirmation to resume");
     click(document.getElementById("okConfirm"));
     await wait(() => text().includes("Running normally"), "back on");
+  });
+
+  it("shows the phone connection, the form for each mission and the calls made, and checks the connection", async () => {
+    click(q(".nav-item[data-view=\"calls\"]"));
+    await wait(() => text().includes("Phone forms"), "the phone calls page");
+    expect(text()).toContain("Simulator: nobody is rung");
+    expect(text()).toContain("Published and current");
+    expect(text()).toContain("Nisha Test"); // the call placed in the earlier test
+    expect(text()).toContain("No reply for two days.");
+    click(q("[data-action=\"voice-check\"]"));
+    await wait(() => text().includes("Signed in as simulator"), "connection checked");
   });
 });
 

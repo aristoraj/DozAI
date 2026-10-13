@@ -72,10 +72,10 @@ function metaFields(m: MissionBundle, e: EmployeeDefinition): VoiceFormField[] {
   const programme = m.programme_name ?? "the programme";
   return [
     { field_id: "identity_confirmed", field_name: "Identity confirmed", datatype: "boolean", field_kind: "meta", analysis_type: "quantitative", condition_for_asking_this_field: "",
-      additional_info: `Ask: "Am I speaking with <first name from the call details>?" Do not say why you are calling yet. Record true only if they confirm. If it is someone else or they will not confirm, apologise, record false, say nothing about the reason for the call, and end the call.`,
+      additional_info: `Ask: "Am I speaking with <first name from the call details>?" Do not say why you are calling yet. A short yes, haan, ji or okay is a clear yes: record true and go on, never ask again. If it is someone else or they will not confirm, apologise, record false, say nothing about the reason for the call, and end the call.`,
       validation: "true or false" },
     { field_id: "consent_given", field_name: "Consent given", datatype: "boolean", field_kind: "meta", analysis_type: "quantitative", condition_for_asking_this_field: "Ask only if identity_confirmed = true.",
-      additional_info: `Say: "I am ${e.name}, calling on behalf of ${programme}. We would like to ask a few short questions about how things are going for you. This call may be recorded. May we continue?" Record true only for a clear yes. If they say no or are unsure, record false, thank them, and end the call. Ask nothing else.`,
+      additional_info: `Say: "I am ${e.name}, calling on behalf of ${programme}. We would like to ask a few short questions about how things are going for you. This call may be recorded. May we continue?" A short yes, haan, ji or okay is a clear yes: record true and go straight on, and never ask this again. If they say no or are unsure, record false, thank them, and end the call. Ask nothing else.`,
       validation: "true or false" },
   ];
 }
@@ -113,9 +113,11 @@ The call details give the person's first name, their language, and which fields 
 Rules for the whole call:
 - Go through the form's fields in order and say each question naturally, as one short sentence of speech. Never read a field name, a field code or an answer code aloud.
 - Ask each question once. If you did not understand, ask once more in different words, then move on and leave the field empty.
+- Once the person has answered a question, never ask it again, even if you are unsure: record what they said and move on.
 - Ask only the fields whose condition is met. Never ask something the call details list as already known.
 - If the person is not who we expected, declines, asks you to stop, sounds upset, or asks for their data to be deleted: be polite, ask nothing else, and end the call. If they are upset or ask for deletion, say a person from the team will follow up.
 - Never promise jobs, money or outcomes. Never share anything about other people. Do not comment on whether their answers are good or bad.
+- Before you finish, go back over the fields whose condition is met. If one still has no answer and the person has not refused it, ask it now.
 - When every field that applies has been answered or skipped, thank the person warmly and end the call. Ask nothing after the last field.`.replace(/\n\n\n/g, "\n\n");
 }
 
@@ -167,6 +169,8 @@ export interface CallRecord {
   ended_at?: string;
   duration_seconds?: number | null;
   audio_url?: string | null;
+  /** The provider holds a recording we can stream on demand (it is not a link: the audio needs our sign-in). Nothing is copied here. */
+  recording?: boolean;
   transcript?: string | null;
   /** Which things the call was asked to find out. */
   asked: string[];
@@ -183,6 +187,7 @@ export interface VoiceResult {
   identity_confirmed?: boolean;
   language?: string;
   audio_url?: string | null;
+  has_recording?: boolean;
   transcript?: string | null;
   duration_seconds?: number | null;
   ended_at?: string;
@@ -220,7 +225,7 @@ export async function ingestVoiceResult(svc: CaseService, tenant: string, caseId
   const record: CallRecord = {
     communication_id: r.communication_id, tenant_id: tenant, case_id: caseId, form_id: prior?.form_id ?? 0, requested_at: prior?.requested_at ?? svc.now().toISOString(),
     asked: prior?.asked ?? [], reason: prior?.reason, scheduled_for: prior?.scheduled_for, started_at: prior?.started_at,
-    status: r.status, ended_at: r.ended_at ?? svc.now().toISOString(), duration_seconds: r.duration_seconds ?? null, audio_url: r.audio_url ?? null, transcript: r.transcript ?? null,
+    status: r.status, ended_at: r.ended_at ?? svc.now().toISOString(), duration_seconds: r.duration_seconds ?? null, audio_url: r.audio_url ?? null, recording: r.has_recording ?? !!r.audio_url, transcript: r.transcript ?? null,
   };
   await svc.store.putCall(record);
   if (c.deleted_at || c.status === "complete") return { applied: true, action: "ignored", finished: false, detail: "the case is closed" };

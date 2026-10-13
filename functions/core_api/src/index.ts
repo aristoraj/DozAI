@@ -13,7 +13,7 @@
 import type { Request } from "express";
 import { DEFAULT_POLICY, type ContactPolicy } from "@dozai/domain";
 import { CaseService, ConversationRunner, DozaiError, GatewayTools, InMemoryStore, RuleClassifier, normalizeMsisdn, seedDemo, DEMO_TENANT } from "@dozai/core";
-import { ClaudeAgentRuntime, ClaudeReplyClassifier, DEFAULT_MODEL, FakeVoice, InteraktChannels, ScriptedAgentRuntime, ZolabsVoice, mcpOverHttp } from "@dozai/adapters";
+import { ClaudeAgentRuntime, ClaudeReplyClassifier, DEFAULT_MODEL, FakeVoice, InteraktChannels, RefreshingToken, ScriptedAgentRuntime, ZOLABS_API_URL, ZolabsVoice, mcpOverHttp, restOverHttp } from "@dozai/adapters";
 import { currentUserEmail, inviteUser, serviceFor } from "@dozai/catalyst";
 import { ROLES, type Principal, type Role } from "@dozai/contracts";
 import { createApp, type RequestContext } from "./app";
@@ -49,9 +49,15 @@ const numbers = (s: string | undefined) => (s ?? "").split(",").map(x => normali
 const hookSecret = env.ZOLABS_WEBHOOK_SECRET && env.ZOLABS_WEBHOOK_SECRET.length >= 24 ? env.ZOLABS_WEBHOOK_SECRET : undefined;
 const publicUrl = env.DOZAI_PUBLIC_URL?.replace(/\/$/, "");
 const fakeVoice = new FakeVoice(); // local development only: nobody is rung
-const voice = piiKey && env.ZOLABS_MCP_URL && env.ZOLABS_ACCESS_TOKEN
+// Signed in to ZoLabs one of two ways: a fixed token (short-lived, for trying things), or the one-time sign-in from
+// scripts/zolabs-login.mjs (ZOLABS_CLIENT_ID + ZOLABS_REFRESH_TOKEN), which the server renews by itself.
+const zolabsAuth = piiKey && env.ZOLABS_CLIENT_ID && env.ZOLABS_REFRESH_TOKEN
+  ? new RefreshingToken({ clientId: env.ZOLABS_CLIENT_ID, refreshToken: env.ZOLABS_REFRESH_TOKEN, piiKey, tokenUrl: env.ZOLABS_TOKEN_URL })
+  : undefined;
+const zolabsToken = zolabsAuth ?? env.ZOLABS_ACCESS_TOKEN; // the self-renewing sign-in wins over a fixed token, which would expire
+const voice = piiKey && env.ZOLABS_MCP_URL && zolabsToken
   ? {
-      port: new ZolabsVoice(mcpOverHttp(env.ZOLABS_MCP_URL, env.ZOLABS_ACCESS_TOKEN)),
+      port: new ZolabsVoice(mcpOverHttp(env.ZOLABS_MCP_URL, zolabsToken), restOverHttp(env.ZOLABS_API_URL ?? ZOLABS_API_URL, zolabsToken)),
       cfg: { piiKey, allowlist: numbers(env.ZOLABS_ALLOWLIST), allowAll: env.ZOLABS_ALLOW_ALL === "1", callsEnabled: env.ZOLABS_ALLOW_CALLS === "1", defaultProgramme: env.DOZAI_PROGRAMME_NAME },
       tenant, webhookSecret: hookSecret, callbackUrl: publicUrl && hookSecret ? `${publicUrl}/api/webhooks/zolabs/${hookSecret}` : undefined,
     }
@@ -68,6 +74,7 @@ if (devAuth && !useCatalyst) void seedDemo(memory);
 const forRequest = (req: Request): RequestContext => {
   const svc = useCatalyst ? serviceFor(req, policy) : memorySvc;
   svc.voiceEnabled = !!voice;
+  zolabsAuth?.attach(svc.store); // a renewed sign-in token is kept in the database, so every copy of the server shares it
   if (openWindow) svc.forceWindow = { windowStartHour: 0, windowEndHour: 24 }; // testing override beats every mission's own window
   const tools = new GatewayTools(svc);
   const rules = new RuleClassifier();

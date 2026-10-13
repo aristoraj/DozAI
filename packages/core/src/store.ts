@@ -83,6 +83,9 @@ export interface Store {
   /** What the agent remembers about one person. Erased with the case. */
   getMemory(tenant: string, caseId: string): Promise<CaseMemory | undefined>;
   putMemory(m: CaseMemory): Promise<void>;
+  /** Platform-level secrets that change while the system runs (for example a renewed sign-in token). The caller encrypts them. */
+  getSecret(name: string): Promise<string | undefined>;
+  putSecret(name: string, value: string): Promise<void>;
 }
 
 export class InMemoryStore implements Store {
@@ -105,6 +108,7 @@ export class InMemoryStore implements Store {
   private controls = new Map<string, Controls>();
   private wakes = new Map<string, WakeRequest>();
   private memories = new Map<string, CaseMemory>();
+  private secrets = new Map<string, string>();
   private k = (t: string, id: string) => `${t}:${id}`;
 
   reset() {
@@ -167,7 +171,7 @@ export class InMemoryStore implements Store {
     if (a.phoneHash) for (const [k, e] of this.inbox) if ((e.event as { phone_hash?: string }).phone_hash === a.phoneHash) this.inbox.delete(k);
   }
   /** Deletes records about people. Missions and employees are configuration, not personal data, so they stay. */
-  async purgeAll() { const m = new Map(this.missions), e = new Map(this.employees), f = new Map(this.voiceForms), c = new Map(this.controls); this.reset(); this.missions = m; this.employees = e; this.voiceForms = f; this.controls = c; }
+  async purgeAll() { const m = new Map(this.missions), e = new Map(this.employees), f = new Map(this.voiceForms), c = new Map(this.controls); this.reset(); this.missions = m; this.employees = e; this.voiceForms = f; this.controls = c; } // secrets survive too
   async getIdem(key: string) { const v = this.idem.get(key); return v === undefined ? undefined : structuredClone(v); }
   async claim(key: string) { if (this.idem.has(key)) return false; this.idem.set(key, { claimed: true }); return true; }
   async putIdem(key: string, value: unknown) { if (!this.idem.has(key)) this.idem.set(key, structuredClone(value)); }
@@ -194,4 +198,6 @@ export class InMemoryStore implements Store {
   async listWakes(t: string, caseId?: string) { return [...this.wakes.values()].filter(w => w.tenant_id === t && (!caseId || w.case_id === caseId)).sort((a, b) => a.at.localeCompare(b.at)).map(w => structuredClone(w)); }
   async getMemory(t: string, caseId: string) { const m = this.memories.get(this.k(t, caseId)); return m && structuredClone(m); }
   async putMemory(m: CaseMemory) { this.memories.set(this.k(m.tenant_id, m.case_id), structuredClone(m)); }
+  async getSecret(name: string) { return this.secrets.get(name); }
+  async putSecret(name: string, value: string) { this.secrets.set(name, value); }
 }

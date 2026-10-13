@@ -64,6 +64,9 @@ describe("the form published to the voice provider", () => {
     expect(c).toContain("asks for their data to be deleted");
     expect(c).toContain("Never promise jobs, money or outcomes");
     expect(c).toContain("Ask nothing after the last field");
+    expect(c).toContain("never ask it again");
+    expect(c).toContain("Before you finish, go back over the fields");
+    expect(field("consent_given").additional_info).toContain("short yes, haan, ji or okay is a clear yes");
     expect(c).not.toMatch(/^\d+\. /m); // no numbered script: the fields carry the order
     expect(form.start_message).toBe("Hello, this is Meera calling on behalf of the programme.");
   });
