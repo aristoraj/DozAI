@@ -28,6 +28,19 @@ Everything runs on **synthetic data** (12 sample cases). Do not load real partic
 | `apps/web` | operator UI (ported prototype, now API-backed) |
 | `scripts/dev-server.ts` | local API + gateway on one in-memory store |
 
+### Web app files (`apps/web`)
+
+| File | What it does |
+|---|---|
+| `index.html` | The page shell: sidebar, top bar, and empty containers the app fills in |
+| `src/main.js` | All screens and actions. Draws HTML from API data and handles clicks |
+| `src/select.js` | Custom dropdowns. Styles every `<select>` automatically, keeping the real one hidden inside (why: [docs/decisions.md](docs/decisions.md)) |
+| `src/number.js` | Custom number fields. Hides the browser's arrows and adds "−" and "+" buttons around the real input |
+| `src/file.js` | Custom file picker. A styled button and the file name, with the real input hidden inside |
+| `src/styles.css` | All styling: colours and the type scale at the top, one look for every form field, then each screen |
+| `src/ui.test.ts` | Clicks through the real page against the real API (in memory, fake data) |
+| `src/select.test.ts`, `number.test.ts`, `file.test.ts` | Tests for the custom controls with fake data |
+
 ## Status
 
 Live-application pass done (see [docs/AUDIT.md](docs/AUDIT.md) for every finding and what is still open).
