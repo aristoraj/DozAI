@@ -242,6 +242,11 @@ export class DocStore implements Store {
   }
 
   // ---- missions ---------------------------------------------------------------------------------------------------------
+  async deleteMission(t: string, v: string) {
+    await this.d.deleteWhere({ tenant_id: t, collection: "mission", doc_id: v });
+    await this.d.deleteWhere({ tenant_id: t, collection: "mpart", doc_id: v });
+    await this.d.deleteWhere({ tenant_id: t, collection: "voiceform", doc_id: v });
+  }
   putMission(t: string, m: MissionBundle) { return this.putBlob("mission", "mpart", t, m.version, m, { version: m.version, name: m.name }); }
   getMission(t: string, version: string) { return this.getBlob<MissionBundle>("mission", "mpart", t, version); }
   listMissions(t: string) { return this.listBlobs<MissionBundle>("mission", "mpart", t); }

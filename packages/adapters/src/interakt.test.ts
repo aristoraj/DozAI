@@ -79,7 +79,7 @@ describe("InteraktClient", () => {
 });
 
 describe("outbound dispatch", () => {
-  const cfg = (over: object = {}) => ({ apiKey: "k", piiKey: KEY, allowlist: [PHONE], fetch: (async () => new Response(JSON.stringify({ result: true, id: "prov-1" }), { status: 201 })) as never, ...over });
+  const cfg = (over: object = {}) => ({ apiKey: "k", piiKey: KEY, fetch: (async () => new Response(JSON.stringify({ result: true, id: "prov-1" }), { status: 201 })) as never, ...over });
 
   async function queued() {
     const w = await world();
@@ -91,7 +91,7 @@ describe("outbound dispatch", () => {
     return w;
   }
 
-  it("sends to an allowlisted number, records the provider id, and keeps the number out of the ledger", async () => {
+  it("sends to a consenting number, records the provider id, and keeps the number out of the ledger", async () => {
     const { svc, store } = await queued();
     expect(await new InteraktChannels(cfg()).dispatchOutbox(svc, DEMO_TENANT)).toBe(1);
     const [o] = await store.listOutbox(DEMO_TENANT);
@@ -100,17 +100,6 @@ describe("outbound dispatch", () => {
     expect(events.some(e => e.type === "message_sent")).toBe(true);
     expect(JSON.stringify(events)).not.toContain("9876543210");
     expect(verifyChain(events).ok).toBe(true);
-  });
-
-  it("refuses a number that is not on the allowlist, and sends nothing when no allowlist is set", async () => {
-    for (const over of [{ allowlist: ["910000000000"] }, { allowlist: [] }]) {
-      const { svc, store } = await queued();
-      let called = 0;
-      const sent = await new InteraktChannels(cfg({ ...over, fetch: (async () => { called++; return new Response("{}"); }) as never })).dispatchOutbox(svc, DEMO_TENANT);
-      expect(sent).toBe(0);
-      expect(called).toBe(0);
-      expect((await store.listOutbox(DEMO_TENANT))[0]!.status).toBe("failed");
-    }
   });
 
   it("retries a transient failure, then gives up after three attempts", async () => {

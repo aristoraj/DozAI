@@ -5,8 +5,8 @@
 // Interakt does not retry a failed webhook and disables it after repeated failures, so the handler only verifies,
 // stores the parsed event in the inbox and returns 200. Processing happens after (and can be re-driven).
 //
-// Safety: a real number is only messaged if it is on INTERAKT_ALLOWLIST (comma-separated digits), unless
-// INTERAKT_ALLOW_ALL=1 is set deliberately. Missing allowlist means NOTHING is sent.
+// Who may be messaged is decided by consent, contact hours, attempt limits and the kill switch (see CaseService.gateContact),
+// not by a list of numbers.
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { decryptPhone, phoneDigits, phoneHash, type CaseService, type InboxEvent, type OutboxItem } from "@dozai/core";
 import type { ChannelPort } from "./index";
@@ -17,8 +17,6 @@ export interface InteraktConfig {
   webhookSecret?: string;
   baseUrl?: string;
   defaultCountryCode?: string;   // digits, e.g. "91"
-  allowlist?: string[];          // digits only
-  allowAll?: boolean;
   /** Our template key -> an existing approved Interakt template (testing only). */
   templateOverrides?: Record<string, { provider_name: string; language?: string; body_fields?: ("first_name" | "programme")[] }>;
   programmeName?: string;
@@ -176,11 +174,6 @@ export class InteraktChannels implements ChannelPort {
   private client: InteraktClient;
   constructor(private cfg: InteraktConfig) { this.client = new InteraktClient(cfg); }
 
-  private allowed(digits: string): boolean {
-    if (this.cfg.allowAll) return true;
-    return (this.cfg.allowlist ?? []).includes(digits);
-  }
-
   /** Sends pending WhatsApp outbox items. Returns the number actually sent. */
   async dispatchOutbox(svc: CaseService, tenant: string): Promise<number> {
     if ((await svc.controls(tenant)).paused) return 0; // the kill switch: nothing is sent while it is on
@@ -204,7 +197,6 @@ export class InteraktChannels implements ChannelPort {
     const p = c && (await svc.store.getParticipant(tenant, c.participant_id));
     if (!c || !p?.phone_enc || p.consent === "declined") { await this.fail(svc, o, "no contact allowed for this case", true); return false; }
     const digits = decryptPhone(this.cfg.piiKey, p.phone_enc);
-    if (!this.allowed(digits)) { await this.fail(svc, o, "number is not on the send allowlist", true); return false; }
     try {
       const id = await this.client.sendText({ digits, text: String(o.payload.text ?? ""), callbackData: `${tenant}|${c.case_id}|${o.outbox_id}` });
       await svc.store.putOutbox({ ...o, status: "sent", attempts: o.attempts + 1, payload: { ...o.payload, provider_message_id: id } });
@@ -222,7 +214,6 @@ export class InteraktChannels implements ChannelPort {
     const p = c && (await svc.store.getParticipant(tenant, c.participant_id));
     if (!c || !p?.phone_enc) { await this.fail(svc, o, "no contact number on file", true); return false; }
     const digits = decryptPhone(this.cfg.piiKey, p.phone_enc);
-    if (!this.allowed(digits)) { await this.fail(svc, o, "number is not on the send allowlist", true); return false; }
 
     const bundle = await svc.getMission(tenant, c.mission_version); // the mission this participant belongs to
     const base = bundle.templates.find(t => t.key === o.payload.template_key);

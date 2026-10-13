@@ -256,7 +256,7 @@ describe("automatic pause when sends keep failing", () => {
     let done = 0;
     for (const o of await w.store.listOutbox(T)) {
       if (o.status !== "pending" || done >= n) continue;
-      await w.store.putOutbox({ ...o, status, payload: status === "failed" ? { ...o.payload, last_error: "number is not on the send allowlist" } : o.payload });
+      await w.store.putOutbox({ ...o, status, payload: status === "failed" ? { ...o.payload, last_error: "WhatsApp rejected the number" } : o.payload });
       done++;
     }
   };
@@ -270,7 +270,7 @@ describe("automatic pause when sends keep failing", () => {
     await settle(w, "failed", 5);
     const paused = await w.camps.checkHealth(T);
     expect(paused).toHaveLength(1);
-    expect(paused[0]!.reason).toContain("last 5 first messages all failed (number is not on the send allowlist)");
+    expect(paused[0]!.reason).toContain("last 5 first messages all failed (WhatsApp rejected the number)");
     expect(await w.camps.get(T, camp.campaign_id)).toMatchObject({ status: "paused", pause_reason: expect.stringContaining("Fix the cause, then resume") });
     w.c.advance(1);
     expect(await w.camps.run(T)).toEqual([]); // nothing more is sent while paused

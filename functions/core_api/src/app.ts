@@ -231,6 +231,14 @@ export function createApp(deps: AppDeps) {
     res.json({ definition: definitionOf(m) });
   }));
 
+  // Deletes a mission nothing uses (a draft that was not wanted, a test). The ZoLabs form made for it stays at ZoLabs, which has no delete.
+  app.post("/api/missions/:version/delete", need("admin"), wrap(async (req, res) => {
+    const version = String(req.params.version);
+    if (req.body?.confirm !== version) throw new DozaiError("CONFIRMATION_MISMATCH", "type the mission version exactly to confirm", 400);
+    await req.ctx.svc.deleteMission(req.principal!, version);
+    res.json({ deleted: true, version });
+  }));
+
   // Signing off the wording: saves the same mission as a new version whose questionnaire is approved, recording who did it and when.
   // A saved mission never changes, so people already on the old version stay on it. New participants and campaigns use the newest.
   app.post("/api/missions/:version/sign-off", need("admin"), wrap(async (req, res) => {
@@ -311,7 +319,7 @@ export function createApp(deps: AppDeps) {
     }
     res.json({
       kind: v?.port.kind ?? "off", calls_enabled: v?.cfg.callsEnabled ?? false,
-      who_can_be_called: !v ? "nobody" : v.cfg.allowAll ? "anyone with consent" : `${(v.cfg.allowlist ?? []).length} numbers on the allowlist`,
+      who_can_be_called: !v || !v.cfg.callsEnabled ? "nobody (calls are switched off)" : "anyone who has consented",
       callback_ready: !!v?.callbackUrl, can_check: CAN.employee!.includes(req.principal!.role), forms,
       calls: calls.map(k => ({ communication_id: k.communication_id, case_id: k.case_id, person: people.get(k.case_id), status: k.status, requested_at: k.requested_at, scheduled_for: k.scheduled_for ?? null, ended_at: k.ended_at ?? null, duration_seconds: k.duration_seconds ?? null, asked: k.asked, reason: k.reason ?? null, has_audio: !!(k.recording || k.audio_url), has_transcript: !!k.transcript, audio_url: seesTranscripts ? (k.recording ? `/calls/${k.communication_id}/recording` : k.audio_url ?? null) : null, transcript: seesTranscripts ? k.transcript ?? null : null })),
     });
@@ -332,7 +340,7 @@ export function createApp(deps: AppDeps) {
   }));
 
   // Places a queued call now instead of waiting for the next scheduler run, and says what happened. The same safeguards apply:
-  // the allowlist, the on/off switch and a claim before ringing, so a call is never placed twice.
+  // the on/off switch, consent and a claim before ringing, so a call is never placed twice.
   const placeCallNow = async (svc: CaseService, tenant: string, outboxId: string): Promise<{ placed: boolean; status: string; error?: string }> => {
     const v = deps.voice;
     if (!v) return { placed: false, status: "pending", error: "phone calls are not switched on" };

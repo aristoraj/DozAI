@@ -4,6 +4,7 @@ import { CaseService } from "./service";
 import { DocStore, InMemoryDocDriver } from "./docstore";
 import { InMemoryStore, type Store } from "./store";
 import { seedDemo, DEMO_TENANT } from "./seed";
+import { PLACEMENT_RETENTION_V1 } from "./mission";
 
 const mkCase = (id: string, version = 1): CaseRecord => ({ case_id: id, tenant_id: "t1", run_id: "r", participant_id: "p", status: "draft", outcome: null, livelihood_state: null, confidence: 0, version, next_action: "", owner: "", attempts: 0, last_touch: null, reason: "" });
 
@@ -143,5 +144,20 @@ describe.each(stores)("Store contract, giving a claim back: %s", (_name, make) =
     await s.unclaim("lock:a");
     expect(await s.claim("lock:a")).toBe(true);
     expect(await s.claim("lock:b")).toBe(true); // others are untouched
+  });
+});
+
+describe.each(stores)("Store contract, deleting a mission: %s", (_name, make) => {
+  it("removes the mission and its phone form link, and only that one", async () => {
+    const s = make();
+    const m = (v: string) => ({ ...PLACEMENT_RETENTION_V1, version: v, name: v });
+    expect(await s.putMission("t1", m("keep-v1") as never)).toBe(true);
+    expect(await s.putMission("t1", m("drop-v1") as never)).toBe(true);
+    await s.putVoiceForm({ tenant_id: "t1", mission_version: "drop-v1", form_id: 5, definition_hash: "h", published_at: "x", published_by: "y" });
+    await s.deleteMission("t1", "drop-v1");
+    expect(await s.getMission("t1", "drop-v1")).toBeUndefined();
+    expect(await s.getVoiceForm("t1", "drop-v1")).toBeUndefined();
+    expect((await s.getMission("t1", "keep-v1"))?.version).toBe("keep-v1");
+    expect(await s.putMission("t1", m("drop-v1") as never)).toBe(true); // the name can be used again
   });
 });

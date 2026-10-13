@@ -3,12 +3,12 @@
 // Store:    DOZAI_STORE=catalyst uses the Data Store table `dozai_docs` (docs/DATASTORE.md); otherwise in-memory.
 // Auth:     the signed-in Catalyst user is mapped to a role by DOZAI_ROLES, e.g. {"you@edzola.com":"admin"}.
 //           Anyone not listed gets 403. Header auth (DOZAI_DEV_AUTH=1) is for local development only.
-// WhatsApp: DOZAI_WHATSAPP=interakt plus INTERAKT_API_KEY and a send allowlist. Anything else = off (simulated replies).
+// WhatsApp: DOZAI_WHATSAPP=interakt plus INTERAKT_API_KEY. Anything else = off (simulated replies).
 // Agent:    real Claude when ANTHROPIC_API_KEY is set, unless DOZAI_AGENT=scripted.
 // Replies:  rules by default. DOZAI_CLASSIFIER=claude also lets a model read replies the rules cannot place (this sends
 //           participant text to the model: a data-policy decision).
 // Phone calls: ZOLABS_MCP_URL + ZOLABS_ACCESS_TOKEN switch on the ZoLabs channel. No real call is placed unless ZOLABS_ALLOW_CALLS=1 AND
-//          the number is in ZOLABS_ALLOWLIST (or ZOLABS_ALLOW_ALL=1). ZOLABS_WEBHOOK_SECRET + DOZAI_PUBLIC_URL build the callback address.
+//          the person has consented and it is inside contact hours. ZOLABS_WEBHOOK_SECRET + DOZAI_PUBLIC_URL build the callback address.
 // Draft questionnaire: used on real conversations only when DOZAI_ALLOW_DRAFT_INSTRUMENT=1 (development and testing).
 import type { Request } from "express";
 import { DEFAULT_POLICY, type ContactPolicy } from "@dozai/domain";
@@ -40,12 +40,10 @@ const jsonOr = <T>(s: string | undefined): T | undefined => { try { return s ? (
 const liveChannel = env.DOZAI_WHATSAPP === "interakt" && env.INTERAKT_API_KEY && piiKey
   ? new InteraktChannels({
       apiKey: env.INTERAKT_API_KEY, piiKey, webhookSecret, defaultCountryCode: defaultCc,
-      allowlist: (env.INTERAKT_ALLOWLIST ?? "").split(",").map(x => normalizeMsisdn(x, defaultCc)).filter(Boolean),
-      allowAll: env.INTERAKT_ALLOW_ALL === "1", templateOverrides: jsonOr(env.INTERAKT_TEMPLATE_MAP), programmeName: env.DOZAI_PROGRAMME_NAME,
+      templateOverrides: jsonOr(env.INTERAKT_TEMPLATE_MAP), programmeName: env.DOZAI_PROGRAMME_NAME,
     })
   : undefined;
 // Phone calls
-const numbers = (s: string | undefined) => (s ?? "").split(",").map(x => normalizeMsisdn(x, defaultCc)).filter(Boolean);
 const hookSecret = env.ZOLABS_WEBHOOK_SECRET && env.ZOLABS_WEBHOOK_SECRET.length >= 24 ? env.ZOLABS_WEBHOOK_SECRET : undefined;
 const publicUrl = env.DOZAI_PUBLIC_URL?.replace(/\/$/, "");
 const fakeVoice = new FakeVoice(); // local development only: nobody is rung
@@ -58,10 +56,10 @@ const zolabsToken = zolabsAuth ?? env.ZOLABS_ACCESS_TOKEN; // the self-renewing 
 const voice = piiKey && env.ZOLABS_MCP_URL && zolabsToken
   ? {
       port: new ZolabsVoice(mcpOverHttp(env.ZOLABS_MCP_URL, zolabsToken), restOverHttp(env.ZOLABS_API_URL ?? ZOLABS_API_URL, zolabsToken)),
-      cfg: { piiKey, allowlist: numbers(env.ZOLABS_ALLOWLIST), allowAll: env.ZOLABS_ALLOW_ALL === "1", callsEnabled: env.ZOLABS_ALLOW_CALLS === "1", defaultProgramme: env.DOZAI_PROGRAMME_NAME },
+      cfg: { piiKey, callsEnabled: env.ZOLABS_ALLOW_CALLS === "1", defaultProgramme: env.DOZAI_PROGRAMME_NAME },
       tenant, webhookSecret: hookSecret, callbackUrl: publicUrl && hookSecret ? `${publicUrl}/api/webhooks/zolabs/${hookSecret}` : undefined,
     }
-  : devAuth ? { port: fakeVoice, cfg: { piiKey: piiKey ?? "", allowAll: true, callsEnabled: true }, tenant } : undefined;
+  : devAuth ? { port: fakeVoice, cfg: { piiKey: piiKey ?? "", callsEnabled: true }, tenant } : undefined;
 const useClaude = !!env.ANTHROPIC_API_KEY && env.DOZAI_AGENT !== "scripted";
 const useModelClassifier = useClaude && env.DOZAI_CLASSIFIER === "claude";
 const allowDraft = env.DOZAI_ALLOW_DRAFT_INSTRUMENT === "1" || devAuth;

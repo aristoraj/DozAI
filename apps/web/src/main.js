@@ -642,7 +642,7 @@ function renderAgentInfo() {
         ${configRow("Agent", r.agent === "claude" ? "Claude, through the tool gateway" : "Scripted stand-in (no model)", r.agent === "claude" ? "A real model decides which tool to use." : "No Anthropic key is set, so the agent follows a fixed script.")}
         ${configRow("Reading replies", r.classifier === "claude" ? "Rules, then a model for unclear replies" : "Rules only", r.classifier === "claude" ? "Participant text is sent to the model only when the rules cannot place it." : "No participant text goes to a model to be understood.")}
         ${configRow("Model", r.model || "None", "Pinned per release; changed in configuration.")}
-        ${configRow("WhatsApp", r.whatsapp === "live" ? "Live" : "Off", r.whatsapp === "live" ? "Approved messages go to participants on the send allowlist." : "Replies are simulated; nothing is sent.")}
+        ${configRow("WhatsApp", r.whatsapp === "live" ? "Live" : "Off", r.whatsapp === "live" ? "Approved messages go to participants who have consented." : "Replies are simulated; nothing is sent.")}
         ${configRow("Contact window", r.contact_window, `At most ${state.mission.policy.max_attempts} approved attempts per participant.`)}
         ${configRow("Auto-confirm", `${Math.round(state.mission.policy.auto_confirm_at * 100)}% and no conflict`, "Anything lower or conflicting goes to a person.")}
       </div></section>
@@ -874,7 +874,7 @@ async function loadVoiceForm(version) {
 function renderMission() {
   const m = state.missionShown ?? state.mission, r = m.runtime;
   const picker = `<select class="filter-select" id="missionPick" aria-label="Choose a mission">${state.missions.map(x => `<option value="${esc(x.version)}" ${x.version === m.version ? "selected" : ""}>${esc(x.name)} · ${esc(x.version)} (${plural(x.participants, "participant")})</option>`).join("")}</select>`;
-  const actions = `${picker}${can("admin") ? `<button class="button primary" data-action="new-mission">Create a mission</button><button class="button ghost" data-action="add-mission">Add from JSON</button>` : ""}`;
+  const actions = `${picker}${can("admin") ? `<button class="button primary" data-action="new-mission">Create a mission</button><button class="button ghost" data-action="add-mission">Add from JSON</button>${m.builtin ? "" : `<button class="button ghost" data-action="delete-mission" style="color:#b64b48;border-color:#b64b48">Delete this mission</button>`}` : ""}`;
   const detail = `<section class="card card-pad" style="margin-top:16px"><div class="card-head"><div><h2>Set up for this client</h2><p>What changes from one mission to the next</p></div>${m.builtin ? `<span class="status not-started">Built in</span>` : `<span class="status confirmed">Saved version</span>`}</div>
       <div class="check-list">
         ${m.employee ? `<div class="check-item"><span class="check-mark">☺</span><span><strong>Done by</strong><small>${esc(m.employee.name)}, ${esc(m.employee.version)} (${m.employee.pinned ? "this exact version" : "follows the current version"}). Open the Employee tab on the Claude engine page to see what it is told.</small></span></div>` : ""}
@@ -887,7 +887,7 @@ function renderMission() {
       </div></section>`;
   const checks = [
     [m.instrument_signed_off, "Questionnaire wording signed off", m.instrument_signed_off ? "Approved" : `${m.questions_total} question slots exist but the wording is not approved yet`],
-    [r.whatsapp === "live", "WhatsApp sending", r.whatsapp === "live" ? "On, to allowlisted numbers" : "Off. Replies are simulated"],
+    [r.whatsapp === "live", "WhatsApp sending", r.whatsapp === "live" ? "On, to participants who have consented" : "Off. Replies are simulated"],
     [!m.instrument.draft, "Interview questions approved", m.instrument.draft ? `${m.instrument.questions} draft questions. ${r.draft_instrument_allowed ? "Allowed for testing only" : "Blocked for real conversations until approved"}` : "Approved"],
     [m.templates.length > 0, "Approved message template", m.templates.map(t => t.key).join(", ") || "None configured"],
     [state.cases.length > 0, "Participants loaded", state.cases.length ? plural(state.cases.length, "participant") : "None yet"],
@@ -995,6 +995,26 @@ function openImportModal() {
 }
 
 // ---- delete case -----------------------------------------------------------------------------------------------------------------------------------
+function openDeleteMissionModal(m) {
+  const used = state.missions.find(x => x.version === m.version)?.participants ?? 0;
+  modal.innerHTML = `<div class="modal-head"><div><h2 id="modalTitle">Delete ${esc(m.name)}?</h2><p>This removes the mission and its questionnaire. It cannot be undone.</p></div><button class="close-button" id="closeModal" aria-label="Close">×</button></div>
+    <div class="modal-body"><div class="form-grid">
+      <div class="field full"><p class="t-sm" style="margin:0">${used ? `<b>${plural(used, "participant")}</b> use this mission, so it cannot be deleted until they are deleted. ` : ""}A mission that has participants or campaigns is kept, because their history points at it. The phone form made for it stays in ZoLabs (ZoLabs has no way to delete it): switch it off there if you do not want it.</p></div>
+      <div class="field full"><label for="delMConfirm">Type <b>${esc(m.version)}</b> to confirm</label><input id="delMConfirm" autocomplete="off" /></div>
+      <p id="delMError" style="color:#b64b48;font-size:12px;grid-column:1/-1;margin:0;white-space:pre-wrap"></p></div></div>
+    <div class="modal-foot"><button class="button ghost" id="cancelDelM">Cancel</button><button class="button primary" id="confirmDelM" disabled style="background:#b64b48;border-color:#b64b48">Delete mission</button></div>`;
+  modalBackdrop.hidden = false;
+  $("closeModal").addEventListener("click", closeModal); $("cancelDelM").addEventListener("click", closeModal);
+  $("delMConfirm").addEventListener("input", e => { $("confirmDelM").disabled = e.target.value.trim() !== m.version; });
+  $("confirmDelM").addEventListener("click", async () => {
+    $("confirmDelM").disabled = true;
+    try {
+      await api(`/missions/${encodeURIComponent(m.version)}/delete`, { method: "POST", body: { confirm: m.version } });
+      closeModal(); state.missionShown = null; state.wording = null; state.wordingFor = null; state.voiceFormFor = null; await loadAll();
+      toast(`${m.version} deleted.`, "success");
+    } catch (e) { $("delMError").textContent = e.message; $("confirmDelM").disabled = false; }
+  });
+}
 function openDeleteModal(c) {
   modal.innerHTML = `<div class="modal-head"><div><h2 id="modalTitle">Delete ${esc(c.id)}?</h2><p>This erases the participant's personal data and cannot be undone.</p></div><button class="close-button" id="closeModal" aria-label="Close">×</button></div>
     <div class="modal-body"><div class="form-grid">
@@ -1083,6 +1103,7 @@ function action(name) {
   }
   if (name === "add-mission") openMissionModal();
   if (name === "new-mission") openStudioModal();
+  if (name === "delete-mission") openDeleteMissionModal(state.missionShown ?? state.mission);
   if (name === "run-batch") {
     act(() => api("/campaigns/run-now", { method: "POST" }), null).then(r => {
       if (!r) return;

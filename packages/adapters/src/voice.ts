@@ -238,9 +238,6 @@ export class ZolabsVoice implements VoicePort {
 
 export interface VoiceDispatchConfig {
   piiKey: string;
-  /** Digits with country code. No real call goes to a number that is not here, unless allowAll is set. */
-  allowlist?: string[];
-  allowAll?: boolean;
   /** Master switch for real calls. Off: queued calls fail with a clear reason and nobody is rung. */
   callsEnabled: boolean;
   /** Said to the voice agent when a mission has no programme name. */
@@ -266,7 +263,6 @@ export async function dispatchVoice(svc: CaseService, tenant: string, voice: Voi
     if (!c || !p?.phone_enc || p.consent === "declined") { await failCall("no contact allowed for this case"); continue; }
     if (!cfg.callsEnabled) { await failCall("phone calls are not switched on"); continue; }
     const digits = decryptPhone(cfg.piiKey, p.phone_enc);
-    if (!cfg.allowAll && !(cfg.allowlist ?? []).includes(digits)) { await failCall("number is not on the call allowlist"); continue; }
 
     // Claim before ringing: if anything fails after this point the call is NOT repeated, because ringing a person twice is worse than missing a call.
     if (!(await svc.store.claim(`voicecall:${o.outbox_id}`))) continue;

@@ -15,7 +15,7 @@ let server: Server;
 let base = "";
 const PII_KEY = randomBytes(32).toString("base64");
 const voicePort = new FakeVoice();
-const voiceCfg = { piiKey: PII_KEY, allowAll: true, callsEnabled: true };
+const voiceCfg = { piiKey: PII_KEY, callsEnabled: true };
 let theSvc: CaseService;
 const realFetch = globalThis.fetch;
 
@@ -379,6 +379,20 @@ describe("the live app", () => {
     expect(m).toContain("Nothing is saved yet");
     click(document.getElementById("saveS"));
     await wait(() => text().includes("Draft: not signed off") && text().includes("studio-check-v1.0"), "saved as a draft", 6000);
+  });
+
+  it("deletes a mission nothing uses, after its version is typed", async () => {
+    // the mission saved as a draft in the test above is shown on the Mission page
+    await wait(() => !!q("[data-action=\"delete-mission\"]"), "the delete button");
+    expect(q("[data-action=\"delete-mission\"]")!.textContent).toContain("Delete this mission");
+    click(q("[data-action=\"delete-mission\"]"));
+    await wait(() => !!document.getElementById("delMConfirm"), "the delete dialog");
+    expect((document.getElementById("confirmDelM") as HTMLButtonElement).disabled).toBe(true);
+    const box = document.getElementById("delMConfirm") as HTMLInputElement;
+    box.value = "studio-check-v1.0"; box.dispatchEvent(new Event("input", { bubbles: true }));
+    expect((document.getElementById("confirmDelM") as HTMLButtonElement).disabled).toBe(false);
+    click(document.getElementById("confirmDelM"));
+    await wait(() => !text().includes("studio-check-v1.0"), "the mission is gone", 6000);
   });
 });
 

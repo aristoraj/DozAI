@@ -16,8 +16,7 @@ Code: `packages/adapters/src/interakt.ts`. Tests: `packages/adapters/src/interak
    - Secret key: the value of `INTERAKT_WEBHOOK_SECRET` in `.env.local`
    - Events: message received, and the API message sent/delivered/read/failed events.
 3. **Interakt: API key.** Developer Settings > API key. Put it in `.env.local` as `INTERAKT_API_KEY=...` (the value Interakt shows; it is sent as `Basic <key>`).
-4. **Allowlist.** Real messages go only to numbers you list, digits with country code, comma separated:
-   `INTERAKT_ALLOWLIST=919876543210`. With no allowlist nothing is sent. `INTERAKT_ALLOW_ALL=1` lifts the limit; do not set it until the pilot is approved.
+4. **Who is messaged.** There is no list of allowed numbers (it was removed on 13 October 2026). Anyone who has consented and is inside the contact hours, with attempts left, can be messaged. Stop everything at once with the kill switch on the Controls tab.
 5. **Switch it on.** In `.env.local`: `DOZAI_WHATSAPP=interakt` and `ANTHROPIC_API_KEY=...`, then `node scripts/deploy.mjs`.
 
 ## Trying it end to end (your own number)

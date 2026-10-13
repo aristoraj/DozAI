@@ -49,7 +49,7 @@ Import participants (each joins a mission)  ->  New campaign (draft, nothing sen
 - **Who is in it** is fixed at start: the chosen mission and cohort, loaded before the campaign started, not yet messaged. People imported later need their own campaign.
 - **Controls.** Draft, Start, Pause, Resume, Stop. Stop is final. A pause pressed while a batch is running is never undone by that batch's bookkeeping.
 - **Refusals.** With WhatsApp live, a campaign will not start if the mission's questions are not approved (every reply would be handed to a person) or its intro template has no WhatsApp template name.
-- **Automatic pause.** If the latest five first messages all failed (wrong key, number not on the allowlist, provider outage) the campaign pauses and shows the reason. Resume after fixing it.
+- **Automatic pause.** If the latest five first messages all failed (wrong key, a number WhatsApp rejects, provider outage) the campaign pauses and shows the reason. Resume after fixing it.
 - **Screen.** Waiting to send, messaged, waiting for a reply, needs review, finished, could not send, sent today. Counts are read from the cases, so they cannot drift. A warning appears if a running campaign has not been run for three minutes (the Cron job is missing).
 
 ### Manual step still needed

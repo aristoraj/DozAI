@@ -62,6 +62,24 @@ export class CaseService {
     return m;
   }
 
+  /**
+   * Deletes a mission that nothing uses. A mission that has participants or campaigns is kept, because their history points at it
+   * and reports would break: delete those people first, or keep the mission. The built-in mission cannot be deleted.
+   */
+  async deleteMission(p: Principal, version: string): Promise<void> {
+    if (version === PLACEMENT_RETENTION_V1.version) throw new DozaiError("MISSION_BUILTIN", "the built-in mission cannot be deleted", 409);
+    await this.getMission(p.tenant_id, version); // 404 when it does not exist
+    const cases = (await this.store.listCases(p.tenant_id)).filter(c => (c.mission_version ?? PLACEMENT_RETENTION_V1.version) === version && !c.deleted_at).length;
+    const campaigns = (await this.store.listCampaigns(p.tenant_id)).filter(c => c.mission_version === version).length;
+    if (cases || campaigns) {
+      const parts = [cases ? `${cases} participant${cases === 1 ? "" : "s"}` : "", campaigns ? `${campaigns} campaign${campaigns === 1 ? "" : "s"}` : ""].filter(Boolean).join(" and ");
+      throw new DozaiError("MISSION_IN_USE", `${parts} use this mission, so it cannot be deleted. Delete those first, or keep the mission.`, 409);
+    }
+    await this.store.deleteMission(p.tenant_id, version);
+    this.missionCache.delete(`${p.tenant_id}|${version}`);
+    console.log(`mission ${version} deleted by ${p.role}:${p.user_id}`);
+  }
+
   /** The built-in mission first, then the saved ones, oldest first. */
   async listMissions(tenant: string): Promise<MissionBundle[]> {
     const saved = (await this.store.listMissions(tenant)).sort((a, b) => (a.created_at ?? "").localeCompare(b.created_at ?? ""));

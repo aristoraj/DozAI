@@ -236,7 +236,7 @@ describe("phone calls over the API", () => {
   const SECRET = "w".repeat(24);
   function withVoice() {
     const port = new FakeVoice();
-    const cfg = { piiKey: KEY, allowAll: true, callsEnabled: true };
+    const cfg = { piiKey: KEY, callsEnabled: true };
     const t = start({ voice: { port, cfg, tenant: DEMO_TENANT, webhookSecret: SECRET, callbackUrl: `https://dozai.example/api/webhooks/zolabs/${SECRET}` } });
     t.svc.voiceEnabled = true;
     void t.svc.store.putControls({ ...defaultControls(DEMO_TENANT), autonomy: { ...defaultControls(DEMO_TENANT).autonomy, voice_call: "automatic" } });
@@ -527,7 +527,7 @@ describe("approvals, controls and replay over the API", () => {
 describe("the phone channel at a glance, over the API", () => {
   function withVoiceOn() {
     const port = new FakeVoice();
-    const t = start({ voice: { port, cfg: { piiKey: KEY, allowAll: true, callsEnabled: true }, tenant: DEMO_TENANT, callbackUrl: "https://dozai.example/api/webhooks/zolabs/x" } });
+    const t = start({ voice: { port, cfg: { piiKey: KEY, callsEnabled: true }, tenant: DEMO_TENANT, callbackUrl: "https://dozai.example/api/webhooks/zolabs/x" } });
     t.svc.voiceEnabled = true;
     return { ...t, port };
   }
@@ -535,7 +535,7 @@ describe("the phone channel at a glance, over the API", () => {
   it("shows the connection, a form per mission and whether it is current", async () => {
     const { call } = withVoiceOn();
     const v = (await call("GET", "/voice")).json;
-    expect(v).toMatchObject({ kind: "simulated", calls_enabled: true, who_can_be_called: "anyone with consent", callback_ready: true, can_check: true });
+    expect(v).toMatchObject({ kind: "simulated", calls_enabled: true, who_can_be_called: "anyone who has consented", callback_ready: true, can_check: true });
     expect(v.forms).toEqual([expect.objectContaining({ mission_version: "MSN-001-v1.3", state: "not_published", form_id: null })]);
     await call("POST", "/missions/MSN-001-v1.3/voice-form/publish", { confirm: true }, "agent_ops");
     expect((await call("GET", "/voice")).json.forms[0]).toMatchObject({ state: "current", form_id: 901, published_by: "agent_ops:dev-user" });
@@ -543,7 +543,7 @@ describe("the phone channel at a glance, over the API", () => {
 
   it("says nobody can be called when the provider is not configured", async () => {
     const { call } = start();
-    expect((await call("GET", "/voice")).json).toMatchObject({ kind: "off", calls_enabled: false, who_can_be_called: "nobody" });
+    expect((await call("GET", "/voice")).json).toMatchObject({ kind: "off", calls_enabled: false, who_can_be_called: "nobody (calls are switched off)" });
     expect((await call("POST", "/voice/check", {})).status).toBe(503);
   });
 
@@ -576,7 +576,7 @@ describe("the phone channel at a glance, over the API", () => {
 describe("listening to a recording", () => {
   async function withRecording() {
     const port = new FakeVoice();
-    const t = start({ voice: { port, cfg: { piiKey: KEY, allowAll: true, callsEnabled: true }, tenant: DEMO_TENANT } });
+    const t = start({ voice: { port, cfg: { piiKey: KEY, callsEnabled: true }, tenant: DEMO_TENANT } });
     const r = await t.call("POST", "/participants/import", { rows: [row], consent_attested: true });
     const id = r.json.created[0].case_id as string;
     await t.svc.store.putCall({ communication_id: "c-9", tenant_id: DEMO_TENANT, case_id: id, form_id: 901, status: "completed", requested_at: "2026-10-12T10:00:00.000Z", asked: [], recording: true });
@@ -607,7 +607,7 @@ describe("listening to a recording", () => {
 describe("staff asking for a phone call on a case", () => {
   function withVoiceOn() {
     const port = new FakeVoice();
-    const t = start({ voice: { port, cfg: { piiKey: KEY, allowAll: true, callsEnabled: true }, tenant: DEMO_TENANT } });
+    const t = start({ voice: { port, cfg: { piiKey: KEY, callsEnabled: true }, tenant: DEMO_TENANT } });
     t.svc.voiceEnabled = true;
     return { ...t, port };
   }
@@ -648,16 +648,16 @@ describe("staff asking for a phone call on a case", () => {
     expect(w.port.calls).toHaveLength(1);
     expect(w.port.calls[0]!.source_id).toBe(id);
 
-    // a number that is not allowed is refused, and the page is told why
+    // calls switched off: refused, and the page is told why
     const off = withVoiceOn(); off.port.calls.length = 0;
-    const closed = start({ voice: { port: new FakeVoice(), cfg: { piiKey: KEY, allowlist: [], callsEnabled: true }, tenant: DEMO_TENANT } });
+    const closed = start({ voice: { port: new FakeVoice(), cfg: { piiKey: KEY, callsEnabled: false }, tenant: DEMO_TENANT } });
     closed.svc.voiceEnabled = true;
     await closed.call("POST", "/controls", { autonomy: { voice_call: "automatic" } }, "admin");
     const id2 = (await closed.call("POST", "/participants/import", { rows: [row], consent_attested: true })).json.created[0].case_id as string;
     await closed.call("POST", "/missions/MSN-001-v1.3/voice-form/publish", { confirm: true }, "agent_ops");
     const refused = await closed.call("POST", `/cases/${id2}/request-call`, {}, "operator");
     expect(refused.json).toMatchObject({ placed: false });
-    expect(refused.json.message).toContain("allowlist");
+    expect(refused.json.message).toContain("not switched on");
   });
 
   it("is limited to people who can run cases, and says so when phone calls are off", async () => {
@@ -675,7 +675,7 @@ describe("publishing a phone form twice at once", () => {
     const port = new FakeVoice();
     const slow = port.publishForm.bind(port);
     port.publishForm = async (def, o) => { await new Promise(r => setTimeout(r, 60)); return slow(def, o); }; // ZoLabs is slow
-    const t = start({ voice: { port, cfg: { piiKey: KEY, allowAll: true, callsEnabled: true }, tenant: DEMO_TENANT } });
+    const t = start({ voice: { port, cfg: { piiKey: KEY, callsEnabled: true }, tenant: DEMO_TENANT } });
     t.svc.voiceEnabled = true;
     const out = await Promise.all(Array.from({ length: 6 }, () => t.call("POST", "/missions/MSN-001-v1.3/voice-form/publish", { confirm: true }, "agent_ops")));
     expect(out.filter(r => r.status === 200)).toHaveLength(1);
@@ -691,7 +691,7 @@ describe("publishing a phone form twice at once", () => {
 describe("the page asking whether a call has finished", () => {
   it("applies a finished call with no callback, only for people who can run cases", async () => {
     const port = new FakeVoice();
-    const t = start({ voice: { port, cfg: { piiKey: KEY, allowAll: true, callsEnabled: true }, tenant: DEMO_TENANT } });
+    const t = start({ voice: { port, cfg: { piiKey: KEY, callsEnabled: true }, tenant: DEMO_TENANT } });
     t.svc.voiceEnabled = true;
     await t.call("POST", "/controls", { autonomy: { voice_call: "automatic" } }, "admin");
     const id = (await t.call("POST", "/participants/import", { rows: [row], consent_attested: true })).json.created[0].case_id as string;
@@ -796,5 +796,50 @@ describe("Mission Studio over the API", () => {
     await call("POST", "/missions", a, "admin");
     const b = (await call("POST", "/missions/draft", brief, "admin")).json.definition;
     expect(b.version).not.toBe(a.version);
+  });
+});
+
+describe("deleting a mission", () => {
+  const brief = { name: "Throwaway check", programme_name: "Project Udaan", goal: "Find out whether people are still working where we placed them.", people: "People who finished a retail training with us.", find_out: "Whether they still work at the same place\nThe name of their employer" };
+  async function withDraftMission() {
+    const t = start();
+    const draft = (await t.call("POST", "/missions/draft", brief, "admin")).json.definition;
+    await t.call("POST", "/missions", draft, "admin");
+    return { ...t, version: draft.version as string };
+  }
+
+  it("removes a mission nothing uses, after the version is typed exactly, for administrators only", async () => {
+    const { call, version } = await withDraftMission();
+    expect((await call("POST", `/missions/${version}/delete`, { confirm: version }, "operator")).status).toBe(403);
+    expect((await call("POST", `/missions/${version}/delete`, { confirm: "something-else" }, "admin")).status).toBe(400);
+    expect((await call("GET", "/missions")).json.missions.map((m: { version: string }) => m.version)).toContain(version);
+    expect((await call("POST", `/missions/${version}/delete`, { confirm: version }, "admin")).json).toEqual({ deleted: true, version });
+    const after = (await call("GET", "/missions")).json;
+    expect(after.missions.map((m: { version: string }) => m.version)).not.toContain(version);
+    expect(after.default_version).toBe("MSN-001-v1.3"); // new participants go back to the one before
+    expect((await call("GET", `/missions/${version}/definition`)).status).toBe(404);
+  });
+
+  it("keeps a mission that has participants or campaigns, and says why", async () => {
+    const { call, svc, version } = await withDraftMission();
+    await call("POST", "/participants/import", { rows: [row], consent_attested: true, mission_version: version });
+    const r = await call("POST", `/missions/${version}/delete`, { confirm: version }, "admin");
+    expect(r.status).toBe(409);
+    expect(r.json.error.code).toBe("MISSION_IN_USE");
+    expect(r.json.error.message).toContain("1 participant");
+    expect(await svc.getMission(DEMO_TENANT, version)).toBeDefined();
+  });
+
+  it("never deletes the built-in mission, and a missing one is a plain not-found", async () => {
+    const { call } = start();
+    expect((await call("POST", "/missions/MSN-001-v1.3/delete", { confirm: "MSN-001-v1.3" }, "admin")).json.error.code).toBe("MISSION_BUILTIN");
+    expect((await call("POST", "/missions/nope-v1/delete", { confirm: "nope-v1" }, "admin")).status).toBe(404);
+  });
+
+  it("frees the version name, so the same mission can be drafted again", async () => {
+    const { call, version } = await withDraftMission();
+    await call("POST", `/missions/${version}/delete`, { confirm: version }, "admin");
+    const again = (await call("POST", "/missions/draft", brief, "admin")).json.definition;
+    expect(again.version).toBe(version);
   });
 });

@@ -59,6 +59,8 @@ export interface Store {
   listSessions(tenant: string): Promise<AgentSession[]>;
   /** Missions are immutable. Returns false when this version already exists. */
   putMission(tenant: string, m: MissionBundle): Promise<boolean>;
+  /** Removes a mission version and the phone form link made for it. Whether it is safe to remove is decided by the caller. */
+  deleteMission(tenant: string, version: string): Promise<void>;
   getMission(tenant: string, version: string): Promise<MissionBundle | undefined>;
   listMissions(tenant: string): Promise<MissionBundle[]>;
   /** Employees belong to the platform, are immutable, and are shared by every client. Returns false when this version already exists. */
@@ -181,6 +183,7 @@ export class InMemoryStore implements Store {
   async putSession(s: AgentSession) { this.sessions.set(s.session_id, structuredClone(s)); }
   async getSession(id: string) { const s = this.sessions.get(id); return s && structuredClone(s); }
   async listSessions(t: string) { return [...this.sessions.values()].filter(s => s.tenant_id === t).map(s => structuredClone(s)); }
+  async deleteMission(t: string, v: string) { this.missions.delete(this.k(t, v)); this.voiceForms.delete(this.k(t, v)); }
   async putMission(t: string, m: MissionBundle) { const key = this.k(t, m.version); if (this.missions.has(key)) return false; this.missions.set(key, structuredClone(m)); return true; }
   async getMission(t: string, v: string) { const m = this.missions.get(this.k(t, v)); return m && structuredClone(m); }
   async listMissions(t: string) { return [...this.missions.entries()].filter(([k]) => k.startsWith(`${t}:`)).map(([, m]) => structuredClone(m)); }

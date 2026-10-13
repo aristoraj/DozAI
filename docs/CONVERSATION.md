@@ -28,7 +28,7 @@ Interview finished  ->  agent reads the answers (evidence)  ->  proposes outcome
 | Any reply after the interview is finished or the case is closed | Ignored |
 
 Limits: 2 re-asks per question, 40 messages per case, free-form messages only within 24 hours of the participant's last
-message, never to someone who opted out, never outside the Interakt send allowlist.
+message, never to someone who opted out, never without consent.
 
 ## Who decides what
 

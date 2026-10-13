@@ -17,7 +17,7 @@ async function world() {
   await svc.createCase({ tenant_id: DEMO_TENANT, run_id: "r", case_id: "C-1", participant: p });
   await svc.beginSession(DEMO_TENANT, "C-1", "test"); // the intro template went out; waiting for a reply
   const sentBodies: any[] = [];
-  const channel = new InteraktChannels({ apiKey: "k", piiKey: KEY, allowlist: [PHONE], fetch: (async (_u: string, init: RequestInit) => { sentBodies.push(JSON.parse(String(init.body))); return new Response(JSON.stringify({ result: true, id: `m${sentBodies.length}` }), { status: 201 }); }) as never });
+  const channel = new InteraktChannels({ apiKey: "k", piiKey: KEY, fetch: (async (_u: string, init: RequestInit) => { sentBodies.push(JSON.parse(String(init.body))); return new Response(JSON.stringify({ result: true, id: `m${sentBodies.length}` }), { status: 201 }); }) as never });
   const runner = new ConversationRunner(svc, { classifier: new RuleClassifier(), allowDraft: true });
   const agent = new ScriptedAgentRuntime(new GatewayTools(svc));
   let n = 0;
@@ -83,7 +83,7 @@ describe("participant replies drive the interview", () => {
     const body = { type: "message_received", data: { customer: { channel_phone_number: PHONE }, message: { id: "dup", message: "Yes" } } };
     await storeInteraktEvent(w.svc, DEMO_TENANT, body, KEY);
     await storeInteraktEvent(w.svc, DEMO_TENANT, body, KEY);
-    const channel = new InteraktChannels({ apiKey: "k", piiKey: KEY, allowlist: [PHONE], fetch: (async (_u: string, init: RequestInit) => { w.sentBodies.push(JSON.parse(String(init.body))); return new Response(JSON.stringify({ result: true, id: "x" }), { status: 201 }); }) as never });
+    const channel = new InteraktChannels({ apiKey: "k", piiKey: KEY, fetch: (async (_u: string, init: RequestInit) => { w.sentBodies.push(JSON.parse(String(init.body))); return new Response(JSON.stringify({ result: true, id: "x" }), { status: 201 }); }) as never });
     const runner = new ConversationRunner(w.svc, { classifier: new RuleClassifier(), allowDraft: true });
     await tick(w.svc, DEMO_TENANT, { piiKey: KEY, channel, agent: new ScriptedAgentRuntime(new GatewayTools(w.svc)), runner });
     await tick(w.svc, DEMO_TENANT, { piiKey: KEY, channel, agent: new ScriptedAgentRuntime(new GatewayTools(w.svc)), runner });
@@ -92,7 +92,7 @@ describe("participant replies drive the interview", () => {
 
   it("when Interakt rejects a text send, the failure is recorded and visible", async () => {
     const w = await world();
-    const bad = new InteraktChannels({ apiKey: "k", piiKey: KEY, allowlist: [PHONE], fetch: (async () => new Response(JSON.stringify({ result: false, message: "Type Text is not supported" }), { status: 400 })) as never });
+    const bad = new InteraktChannels({ apiKey: "k", piiKey: KEY, fetch: (async () => new Response(JSON.stringify({ result: false, message: "Type Text is not supported" }), { status: 400 })) as never });
     await storeInteraktEvent(w.svc, DEMO_TENANT, { type: "message_received", data: { customer: { channel_phone_number: PHONE }, message: { id: "x1", message: "yes" } } }, KEY);
     const runner = new ConversationRunner(w.svc, { classifier: new RuleClassifier(), allowDraft: true });
     await tick(w.svc, DEMO_TENANT, { piiKey: KEY, channel: bad, agent: new ScriptedAgentRuntime(new GatewayTools(w.svc)), runner });
@@ -106,7 +106,7 @@ describe("participant replies drive the interview", () => {
     const woke: string[] = [];
     const agent = { async runCase() { throw new Error("n/a"); }, async resumeCase(_s: unknown, _t: string, id: string) { woke.push(id); return {} as never; } };
     const runner = new ConversationRunner(w.svc, { classifier: new RuleClassifier(), allowDraft: true });
-    const channel = new InteraktChannels({ apiKey: "k", piiKey: KEY, allowlist: [PHONE], fetch: (async () => new Response(JSON.stringify({ result: true, id: "m" }), { status: 201 })) as never });
+    const channel = new InteraktChannels({ apiKey: "k", piiKey: KEY, fetch: (async () => new Response(JSON.stringify({ result: true, id: "m" }), { status: 201 })) as never });
     let n = 100;
     const say = async (text: string) => { await storeInteraktEvent(w.svc, DEMO_TENANT, { type: "message_received", data: { customer: { channel_phone_number: PHONE }, message: { id: `z${++n}`, message: text } } }, KEY); return tick(w.svc, DEMO_TENANT, { piiKey: KEY, channel, agent, runner }); };
     for (const r of ["yes", "4", "Nursing"]) await say(r);

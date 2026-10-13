@@ -9,7 +9,7 @@ const KEY = randomBytes(32).toString("base64");
 const PHONE = "919876543210";
 
 describe("template override (testing aid)", () => {
-  it("sends the substitute template with its own language and variables, still only to the allowlist", async () => {
+  it("sends the substitute template with its own language and variables, to the person who consented", async () => {
     const store = new InMemoryStore();
     const svc = new CaseService(store, () => new Date(), { ...DEFAULT_POLICY, windowStartHour: 0, windowEndHour: 24 });
     const participant: Participant = { participant_id: "p1", tenant_id: DEMO_TENANT, display_name: "Asha", first_name: "Asha", phone_masked: "•••• 3210", phone_enc: encryptPhone(KEY, PHONE), phone_hash: phoneHash(KEY, PHONE), location: "J", cohort: "T", language: "en", consent: "unknown", recorded_employer: "Acme" };
@@ -21,7 +21,7 @@ describe("template override (testing aid)", () => {
 
     let body: any;
     const ch = new InteraktChannels({
-      apiKey: "k", piiKey: KEY, allowlist: [PHONE],
+      apiKey: "k", piiKey: KEY,
       templateOverrides: { placement_intro_v1: { provider_name: "other_approved_template", language: "en_US", body_fields: [] } },
       fetch: (async (_u: string, init: RequestInit) => { body = JSON.parse(String(init.body)); return new Response(JSON.stringify({ result: true, id: "m1" }), { status: 201 }); }) as never,
     });

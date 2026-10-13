@@ -9,7 +9,7 @@ const KEY = randomBytes(32).toString("base64");
 const PHONE = "919876543210";
 const M = PLACEMENT_RETENTION_V1;
 const OPEN = { ...DEFAULT_POLICY, windowStartHour: 0, windowEndHour: 24 };
-const cfg = (over: Partial<VoiceDispatchConfig> = {}): VoiceDispatchConfig => ({ piiKey: KEY, allowlist: [PHONE], callsEnabled: true, ...over });
+const cfg = (over: Partial<VoiceDispatchConfig> = {}): VoiceDispatchConfig => ({ piiKey: KEY, callsEnabled: true, ...over });
 
 async function world(now = () => new Date()) {
   const svc = new CaseService(new InMemoryStore(), now, OPEN);
@@ -63,8 +63,8 @@ describe("placing the calls the agent asked for", () => {
     expect((await svc.store.getCall(DEMO_TENANT, voice.calls[0]!.communication_id))).toMatchObject({ status: "scheduled", scheduled_for: "2026-10-13T05:00:00.000Z" });
   });
 
-  it("never rings a number that is not on the allowlist, or when real calls are switched off, and the case goes back to waiting", async () => {
-    for (const [why, c] of [["not on the call allowlist", cfg({ allowlist: ["910000000000"] })], ["phone calls are not switched on", cfg({ callsEnabled: false })]] as const) {
+  it("never rings when real calls are switched off, and the case goes back to waiting", async () => {
+    for (const [why, c] of [["phone calls are not switched on", cfg({ callsEnabled: false })]] as const) {
       const { svc, ask } = await world();
       await ask();
       const voice = new FakeVoice();
@@ -75,13 +75,6 @@ describe("placing the calls the agent asked for", () => {
       expect(String(out.payload.last_error)).toContain(why);
       expect((await svc.getCase(DEMO_TENANT, "C-1")).status).toBe("waiting");
     }
-  });
-
-  it("allowAll lets any number through (testing only)", async () => {
-    const { svc, ask } = await world();
-    await ask();
-    const voice = new FakeVoice();
-    expect(await dispatchVoice(svc, DEMO_TENANT, voice, cfg({ allowlist: [], allowAll: true }))).toBe(1);
   });
 
   it("never rings someone who declined", async () => {

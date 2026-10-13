@@ -29,7 +29,7 @@ async function world(id = "C-1") {
   };
   const askCall = () => act("voice_call_request", { reason: "No reply for two days." });
   const outbox = async () => svc.store.listOutbox(T);
-  const voiceCfg = { piiKey: KEY, allowAll: true, callsEnabled: true };
+  const voiceCfg = { piiKey: KEY, callsEnabled: true };
   return { svc, clock, tools, act, askCall, outbox, voiceCfg, session, id };
 }
 
