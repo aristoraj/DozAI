@@ -21,7 +21,7 @@ export interface VoicePort {
   scheduleCall(i: { form_id: number; phone: string; context: string; source_id: string; at: string }): Promise<{ communication_id: string }>;
   endCall(communicationId: string): Promise<void>;
   /** The call's data as the provider holds it now, or null when it cannot be found. */
-  fetchResult(communicationId: string): Promise<VoiceResult | null>;
+  fetchResult(communicationId: string, o?: { formId?: number }): Promise<VoiceResult | null>;
   /** Who the connection is signed in as. A cheap way to prove the connection works. */
   whoami(): Promise<Record<string, unknown> | string>;
   /** The call's recording, streamed from the provider on demand, or null when there is none. Nothing is stored on our side. */
@@ -59,7 +59,7 @@ export class FakeVoice implements VoicePort {
   async fetchRecording(id: string) { const data = this.recordings.get(id); return data ? { data, contentType: "audio/mpeg" } : null; }
   async whoami() { return { account: "simulator" }; }
   async endCall(id: string) { const c = this.calls.find(x => x.communication_id === id); if (c) c.ended = true; }
-  async fetchResult(id: string) { return this.results.get(id) ?? null; }
+  async fetchResult(id: string, _o?: { formId?: number }) { return this.results.get(id) ?? null; }
 
   /** Script how a call ended. Defaults to a person who agreed, confirmed who they are, and answered nothing yet. */
   complete(communicationId: string, over: Partial<VoiceResult> = {}): VoiceResult {
@@ -209,10 +209,20 @@ export class ZolabsVoice implements VoicePort {
   async whoami() { return (await this.mcp.callTool("whoami", {})) as Record<string, unknown> | string; }
   async endCall(id: string) { await this.mcp.callTool("end_phone_call", { communication_id: Number(id), confirmed: true }); }
 
-  async fetchResult(id: string): Promise<VoiceResult | null> {
-    const list = await this.mcp.callTool("list_communications", { search: id, per_page: 10 });
-    const items = (Array.isArray(list) ? list : (pick(list, "result", "communications", "items", "data") as unknown[] | undefined)) ?? [];
-    const hit = (Array.isArray(items) ? items : []).find(x => asId(pick(x, "communication_id", "id")) === id);
+  async fetchResult(id: string, o: { formId?: number } = {}): Promise<VoiceResult | null> {
+    // The service cannot search calls by their number (a search by id finds nothing), so calls are listed by the form they belong
+    // to, page by page, until ours turns up. Without a form id the search is the last resort.
+    const pageOf = (list: unknown): unknown[] => { const items = (Array.isArray(list) ? list : (pick(list, "communications", "result", "items", "data") as unknown[] | undefined)) ?? []; return Array.isArray(items) ? items : []; };
+    let hit: unknown;
+    if (o.formId) {
+      for (let page = 1; page <= 5 && !hit; page++) {
+        const items = pageOf(await this.mcp.callTool("list_communications", { form_id: o.formId, per_page: 50, page }));
+        hit = items.find(x => asId(pick(x, "communication_id", "id")) === id);
+        if (items.length < 50) break; // that was the last page
+      }
+    } else {
+      hit = pageOf(await this.mcp.callTool("list_communications", { search: id, per_page: 10 })).find(x => asId(pick(x, "communication_id", "id")) === id);
+    }
     const parsed = hit ? parseZolabsCommunication(hit) : null;
     if (!parsed) return null;
     if (parsed.status === "completed" && !parsed.transcript) {
@@ -296,6 +306,31 @@ export async function storeVoiceCallback(svc: CaseService, tenant: string, body:
 const GIVE_UP_AFTER_MS = 24 * 3_600_000;
 
 /** Fetch and apply the results of calls the provider has told us about. Returns the cases whose answers the agent should now judge. */
+/**
+ * Asks the provider about every call that has not finished, instead of waiting for its callback (which may never come).
+ * Safe to run as often as you like and from several places: a finished call is applied once, whoever sees it first.
+ */
+export async function syncCalls(svc: CaseService, tenant: string, voice: VoicePort, o: { caseId?: string } = {}): Promise<{ checked: number; applied: number; wake: { case_id: string; key: string }[]; errors: string[] }> {
+  const wake: { case_id: string; key: string }[] = [];
+  const errors: string[] = [];
+  let checked = 0, applied = 0;
+  const now = svc.now().getTime();
+  for (const call of await svc.store.listCalls(tenant, o.caseId)) {
+    if (call.status !== "in_progress" && call.status !== "scheduled") continue;
+    if (call.status === "scheduled" && call.scheduled_for && Date.parse(call.scheduled_for) > now) continue; // not due yet
+    if (now - Date.parse(call.requested_at) > GIVE_UP_AFTER_MS) continue;                                      // the nightly clean-up deals with these
+    checked++;
+    try {
+      const result = await voice.fetchResult(call.communication_id, { formId: call.form_id || undefined });
+      if (!result || !["completed", "no_answer", "busy", "declined", "failed", "cancelled"].includes(result.status)) continue;
+      const r = await ingestVoiceResult(svc, tenant, call.case_id, result);
+      if (r.applied) applied++;
+      if (r.finished) wake.push({ case_id: call.case_id, key: `voice:${call.communication_id}` });
+    } catch (e) { console.error("voice sync", call.communication_id, (e as Error).message); errors.push((e as Error).message.slice(0, 200)); }
+  }
+  return { checked, applied, wake, errors };
+}
+
 export async function processVoiceInbox(svc: CaseService, tenant: string, voice: VoicePort): Promise<{ processed: number; errors: number; wake: { case_id: string; key: string }[] }> {
   let processed = 0, errors = 0;
   const wake: { case_id: string; key: string }[] = [];
@@ -305,7 +340,7 @@ export async function processVoiceInbox(svc: CaseService, tenant: string, voice:
     try {
       const call = await svc.store.getCall(tenant, id);
       if (!call) { await svc.store.putInbox({ ...item, status: "error", error: "no call with this id was placed by us" }); errors++; continue; }
-      const result = await voice.fetchResult(id);
+      const result = await voice.fetchResult(id, { formId: call.form_id || undefined });
       if (!result || !["completed", "no_answer", "busy", "declined", "failed", "cancelled"].includes(result.status)) {
         // Not ready yet: leave it for the next run, but not for ever.
         if (svc.now().getTime() - new Date(item.received_at).getTime() > GIVE_UP_AFTER_MS) { await svc.store.putInbox({ ...item, status: "error", error: "the call never finished" }); errors++; }

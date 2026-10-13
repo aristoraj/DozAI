@@ -603,3 +603,111 @@ describe("listening to a recording", () => {
     expect((await get(call, "/calls/c-9/recording", "reviewer")).status).toBe(404);
   });
 });
+
+describe("staff asking for a phone call on a case", () => {
+  function withVoiceOn() {
+    const port = new FakeVoice();
+    const t = start({ voice: { port, cfg: { piiKey: KEY, allowAll: true, callsEnabled: true }, tenant: DEMO_TENANT } });
+    t.svc.voiceEnabled = true;
+    return { ...t, port };
+  }
+  async function newCase(t: ReturnType<typeof withVoiceOn>) {
+    const r = await t.call("POST", "/participants/import", { rows: [row], consent_attested: true });
+    return r.json.created[0].case_id as string;
+  }
+
+  it("goes through the same checks and the same approval as the agent, and is recorded as the person who asked", async () => {
+    const w = withVoiceOn();
+    const id = await newCase(w);
+    // no phone form yet: refused for the same reason the agent would be
+    expect((await w.call("POST", `/cases/${id}/request-call`, {}, "operator")).status).toBe(422);
+    await w.call("POST", "/missions/MSN-001-v1.3/voice-form/publish", { confirm: true }, "agent_ops");
+    const ok = await w.call("POST", `/cases/${id}/request-call`, { reason: "Test call for the pilot" }, "operator");
+    expect(ok.status).toBe(200);
+    expect(ok.json).toMatchObject({ requested: true, held: true });
+    const [item] = await w.svc.store.listOutbox(DEMO_TENANT);
+    expect(item).toMatchObject({ kind: "voice_call", status: "held", payload: { reason: "Test call for the pilot" } });
+    const ev = (await w.svc.store.listEvents(DEMO_TENANT, id)).find(e => e.type === "call_requested")!;
+    expect(ev.actor).toBe("operator:dev-user"); // a person, not "agent:"
+    // nothing rings until it is approved and the scheduler runs
+    expect(w.port.calls).toHaveLength(0);
+    // approving places the call at once, not on the next scheduler run
+    const approved = await w.call("POST", `/approvals/${item!.outbox_id}/approve`, {}, "reviewer");
+    expect(approved.status).toBe(200);
+    expect(approved.json).toMatchObject({ status: "sent", call: { placed: true } });
+    expect(w.port.calls).toHaveLength(1);
+  });
+
+  it("rings straight away when calls do not need approval, and says plainly when it cannot", async () => {
+    const w = withVoiceOn();
+    await w.call("POST", "/controls", { autonomy: { voice_call: "automatic" } }, "admin");
+    const id = await newCase(w);
+    await w.call("POST", "/missions/MSN-001-v1.3/voice-form/publish", { confirm: true }, "agent_ops");
+    const r = await w.call("POST", `/cases/${id}/request-call`, {}, "operator");
+    expect(r.json).toMatchObject({ held: false, placed: true, message: "Calling now." });
+    expect(w.port.calls).toHaveLength(1);
+    expect(w.port.calls[0]!.source_id).toBe(id);
+
+    // a number that is not allowed is refused, and the page is told why
+    const off = withVoiceOn(); off.port.calls.length = 0;
+    const closed = start({ voice: { port: new FakeVoice(), cfg: { piiKey: KEY, allowlist: [], callsEnabled: true }, tenant: DEMO_TENANT } });
+    closed.svc.voiceEnabled = true;
+    await closed.call("POST", "/controls", { autonomy: { voice_call: "automatic" } }, "admin");
+    const id2 = (await closed.call("POST", "/participants/import", { rows: [row], consent_attested: true })).json.created[0].case_id as string;
+    await closed.call("POST", "/missions/MSN-001-v1.3/voice-form/publish", { confirm: true }, "agent_ops");
+    const refused = await closed.call("POST", `/cases/${id2}/request-call`, {}, "operator");
+    expect(refused.json).toMatchObject({ placed: false });
+    expect(refused.json.message).toContain("allowlist");
+  });
+
+  it("is limited to people who can run cases, and says so when phone calls are off", async () => {
+    const w = withVoiceOn();
+    const id = await newCase(w);
+    expect((await w.call("POST", `/cases/${id}/request-call`, {}, "reviewer")).status).toBe(403);
+    const off = start();
+    const r = await off.call("POST", "/participants/import", { rows: [row], consent_attested: true });
+    expect((await off.call("POST", `/cases/${r.json.created[0].case_id}/request-call`, {})).status).toBe(503);
+  });
+});
+
+describe("publishing a phone form twice at once", () => {
+  it("creates one form, refuses the others while it runs, and allows an update afterwards", async () => {
+    const port = new FakeVoice();
+    const slow = port.publishForm.bind(port);
+    port.publishForm = async (def, o) => { await new Promise(r => setTimeout(r, 60)); return slow(def, o); }; // ZoLabs is slow
+    const t = start({ voice: { port, cfg: { piiKey: KEY, allowAll: true, callsEnabled: true }, tenant: DEMO_TENANT } });
+    t.svc.voiceEnabled = true;
+    const out = await Promise.all(Array.from({ length: 6 }, () => t.call("POST", "/missions/MSN-001-v1.3/voice-form/publish", { confirm: true }, "agent_ops")));
+    expect(out.filter(r => r.status === 200)).toHaveLength(1);
+    expect(out.filter(r => r.status === 409).every(r => r.json.error.code === "PUBLISH_IN_PROGRESS")).toBe(true);
+    expect(port.forms.size).toBe(1); // not six
+    // the lock was let go: a later publish is an update of the same form
+    const again = await t.call("POST", "/missions/MSN-001-v1.3/voice-form/publish", { confirm: true }, "agent_ops");
+    expect(again.status).toBe(200);
+    expect(port.forms.size).toBe(1);
+  });
+});
+
+describe("the page asking whether a call has finished", () => {
+  it("applies a finished call with no callback, only for people who can run cases", async () => {
+    const port = new FakeVoice();
+    const t = start({ voice: { port, cfg: { piiKey: KEY, allowAll: true, callsEnabled: true }, tenant: DEMO_TENANT } });
+    t.svc.voiceEnabled = true;
+    await t.call("POST", "/controls", { autonomy: { voice_call: "automatic" } }, "admin");
+    const id = (await t.call("POST", "/participants/import", { rows: [row], consent_attested: true })).json.created[0].case_id as string;
+    await t.call("POST", "/missions/MSN-001-v1.3/voice-form/publish", { confirm: true }, "agent_ops");
+    await t.call("POST", `/cases/${id}/request-call`, {}, "operator");
+    const callId = port.calls[0]!.communication_id;
+    expect((await t.call("POST", "/voice/sync", {}, "operator")).json).toMatchObject({ checked: 1, applied: 0 }); // still ringing
+    port.complete(callId, { answers: { work_status: "I work at the same place as before", employer_name: "Ravi Corp", role_title: "Packer" } });
+    expect((await t.call("POST", "/voice/sync", {}, "reviewer")).status).toBe(403);
+    const r = (await t.call("POST", "/voice/sync", {}, "operator")).json;
+    expect(r).toMatchObject({ checked: 1, applied: 1 });
+    expect((await t.svc.store.getCall(DEMO_TENANT, callId))?.status).toBe("completed");
+    expect((await t.call("GET", "/voice")).json.calls[0]).toMatchObject({ status: "completed", person: "Ravi Test" });
+  });
+
+  it("answers an empty result when phone calls are off", async () => {
+    expect((await start().call("POST", "/voice/sync", {})).json).toEqual({ checked: 0, applied: 0, woken: [], errors: [] });
+  });
+});

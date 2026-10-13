@@ -134,3 +134,14 @@ describe.each(stores)("Store contract, platform secrets: %s", (_name, make) => {
     expect(await s.getSecret("zolabs_refresh_token")).toBe("v2");
   });
 });
+
+describe.each(stores)("Store contract, giving a claim back: %s", (_name, make) => {
+  it("a claim can be taken once, and again only after it is given back", async () => {
+    const s = make();
+    expect(await s.claim("lock:a")).toBe(true);
+    expect(await s.claim("lock:a")).toBe(false);
+    await s.unclaim("lock:a");
+    expect(await s.claim("lock:a")).toBe(true);
+    expect(await s.claim("lock:b")).toBe(true); // others are untouched
+  });
+});

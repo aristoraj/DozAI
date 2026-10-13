@@ -4,7 +4,7 @@
 import { CampaignService, type CampaignRunResult, type CaseService, type ConversationRunner, type WakeRequest } from "@dozai/core";
 import type { AgentRuntimePort, ChannelPort } from "./index";
 import { processInbox } from "./interakt";
-import { dispatchVoice, processVoiceInbox, type VoiceDispatchConfig, type VoicePort } from "./voice";
+import { dispatchVoice, processVoiceInbox, syncCalls, type VoiceDispatchConfig, type VoicePort } from "./voice";
 
 export interface TickResult {
   inbox: { processed: number; errors: number };
@@ -56,7 +56,11 @@ export async function tick(
   // 1b. Phone calls that have finished: fetch their data, record the answers, and wake the agent where there are answers to judge.
   let callResults = { processed: 0, errors: 0 };
   if (deps.voice) {
-    try { const v = await processVoiceInbox(svc, tenant, deps.voice.port); callResults = v; wake.push(...v.wake); }
+    try {
+      const v = await processVoiceInbox(svc, tenant, deps.voice.port); callResults = v; wake.push(...v.wake);
+      // The provider's callback may never arrive, so unfinished calls are also asked about directly.
+      const s = await syncCalls(svc, tenant, deps.voice.port); callResults = { processed: v.processed + s.applied, errors: v.errors }; wake.push(...s.wake);
+    }
     catch (e) { console.error("voice results", (e as Error).message); callResults = { processed: 0, errors: 1 }; }
   }
 

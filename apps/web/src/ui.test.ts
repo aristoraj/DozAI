@@ -271,6 +271,7 @@ describe("the live app", () => {
     click(document.getElementById("okConfirm"));
     await wait(() => text().includes("Published and current"), "published", 6000);
     expect(voicePort.forms.size).toBe(1);
+    expect(q("[data-action=\"voice-publish\"]")).toBeNull(); // nothing left to publish: the button is gone, so it cannot be pressed twice
 
     // a participant on this mission, a call asked for by the agent, and placed by the scheduler
     const version = (await (await fetch(base + "/api/mission", { headers: { "x-dozai-role": "admin" } })).json()).version as string;
@@ -291,7 +292,8 @@ describe("the live app", () => {
     expect(text()).toContain("No reply for two days.");
     click(q("[data-approve]"));
     await wait(() => text().includes("Nothing is waiting"), "approved", 6000);
-    expect(await dispatchVoice(theSvc, DEMO_TENANT, voicePort, voiceCfg)).toBe(1);
+    expect(voicePort.calls).toHaveLength(1); // approving rang straight away
+    expect(await dispatchVoice(theSvc, DEMO_TENANT, voicePort, voiceCfg)).toBe(0); // so the scheduler has nothing left to place
 
     click(document.getElementById("refresh"));
     click(q('.nav-item[data-view="cases"]'));

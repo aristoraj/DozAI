@@ -4,8 +4,8 @@ import { ZodError } from "zod";
 import { timingSafeEqual } from "node:crypto";
 import { DeleteCaseInputSchema, ImportInputSchema, ReviewDecisionInputSchema, RunAgentInputSchema, ROLES, type CaseRecord, type Principal, type Role } from "@dozai/contracts";
 import type { EmployeeDefinition } from "@dozai/core";
-import { ACTION_KINDS, ACTION_LABELS, actionKindOf, approvalStats, MEMORY_SPEC, replaySession, type OutboxItem, buildAgentContext, buildVoiceForm, voiceFormHash, CampaignService, CaseService, ConversationRunner, evaluateRequirements, questionById, DozaiError, DEMO_TENANT, InMemoryStore, importParticipants, seedDemo, type CampaignAction, type MissionBundle } from "@dozai/core";
-import { FakeChannels, FakeVoice, matchSignatureVariant, processInbox, processVoiceInbox, recordRejected, storeInteraktEvent, storeVoiceCallback, tick, type VoiceDispatchConfig, type VoicePort, type AgentRuntimePort, type ChannelPort } from "@dozai/adapters";
+import { GatewayTools, ACTION_KINDS, ACTION_LABELS, actionKindOf, approvalStats, MEMORY_SPEC, replaySession, type OutboxItem, buildAgentContext, buildVoiceForm, voiceFormHash, CampaignService, CaseService, ConversationRunner, evaluateRequirements, questionById, DozaiError, DEMO_TENANT, InMemoryStore, importParticipants, seedDemo, type CampaignAction, type MissionBundle } from "@dozai/core";
+import { dispatchVoice, syncCalls, FakeChannels, FakeVoice, matchSignatureVariant, processInbox, processVoiceInbox, recordRejected, storeInteraktEvent, storeVoiceCallback, tick, type VoiceDispatchConfig, type VoicePort, type AgentRuntimePort, type ChannelPort } from "@dozai/adapters";
 import { auditView, caseView } from "./views";
 
 export interface RequestContext { svc: CaseService; agent: AgentRuntimePort; runner?: ConversationRunner }
@@ -249,11 +249,17 @@ export function createApp(deps: AppDeps) {
     const v = deps.voice;
     if (!v) throw new DozaiError("VOICE_NOT_CONFIGURED", "phone calls are not switched on for this platform", 503);
     if (req.body?.confirm !== true) throw new DozaiError("CONFIRMATION_REQUIRED", "send {\"confirm\": true} after reviewing the preview", 400);
-    const { svc } = req.ctx; const t = req.principal!.tenant_id;
-    const state = await voiceState(svc, t, String(req.params.version));
-    const { form_id } = await v.port.publishForm(state.definition, { existingFormId: state.link?.form_id, callbackUrl: v.callbackUrl });
-    await svc.store.putVoiceForm({ tenant_id: t, mission_version: String(req.params.version), form_id, definition_hash: voiceFormHash(state.definition), published_at: svc.now().toISOString(), published_by: `${req.principal!.role}:${req.principal!.user_id}` });
-    res.json(await voiceState(svc, t, String(req.params.version)));
+    const { svc } = req.ctx; const t = req.principal!.tenant_id; const version = String(req.params.version);
+    // One publish per mission at a time. Creating a form at ZoLabs is slow, and a second request that starts before the first has
+    // saved its form id would create a second form. The lock lasts at most five minutes if a request dies halfway.
+    const lock = `voicepub:${t}:${version}:${Math.floor(svc.now().getTime() / 300_000)}`;
+    if (!(await svc.store.claim(lock))) throw new DozaiError("PUBLISH_IN_PROGRESS", "This phone form is already being published. Wait for it to finish, then refresh the page. Publishing again now would create a duplicate form at ZoLabs.", 409);
+    try {
+      const state = await voiceState(svc, t, version); // read after taking the lock, so a finished publish is seen as an existing form
+      const { form_id } = await v.port.publishForm(state.definition, { existingFormId: state.link?.form_id, callbackUrl: v.callbackUrl });
+      await svc.store.putVoiceForm({ tenant_id: t, mission_version: version, form_id, definition_hash: voiceFormHash(state.definition), published_at: svc.now().toISOString(), published_by: `${req.principal!.role}:${req.principal!.user_id}` });
+      res.json(await voiceState(svc, t, version));
+    } finally { await svc.store.unclaim(lock); }
   }));
 
   // The phone channel at a glance: is it connected and allowed to ring, which missions have a published form and whether it is
@@ -293,6 +299,52 @@ export function createApp(deps: AppDeps) {
     const rec = await v.port.fetchRecording(call.communication_id);
     if (!rec) throw new DozaiError("NOT_FOUND", "the provider has no recording for this call", 404);
     res.set({ "content-type": rec.contentType, "content-length": String(rec.data.length), "cache-control": "private, no-store" }).send(rec.data);
+  }));
+
+  // Places a queued call now instead of waiting for the next scheduler run, and says what happened. The same safeguards apply:
+  // the allowlist, the on/off switch and a claim before ringing, so a call is never placed twice.
+  const placeCallNow = async (svc: CaseService, tenant: string, outboxId: string): Promise<{ placed: boolean; status: string; error?: string }> => {
+    const v = deps.voice;
+    if (!v) return { placed: false, status: "pending", error: "phone calls are not switched on" };
+    await dispatchVoice(svc, tenant, v.port, v.cfg);
+    const o = (await svc.store.listOutbox(tenant)).find(x => x.outbox_id === outboxId);
+    return { placed: o?.status === "sent", status: o?.status ?? "unknown", ...(o?.status === "failed" ? { error: String(o.payload.last_error ?? "the call could not be placed") } : {}) };
+  };
+
+  // A person asks for a phone call on a case. It goes through exactly the same door as the agent's request: the same checks
+  // (consent, hours, attempts, a published form, something still missing) and the same approval, so staff cannot ring anyone the agent could not.
+  app.post("/api/cases/:id/request-call", need("run"), wrap(async (req, res) => {
+    if (!deps.voice) throw new DozaiError("VOICE_NOT_CONFIGURED", "phone calls are not switched on for this platform", 503);
+    const { svc } = req.ctx; const t = req.principal!.tenant_id; const id = String(req.params.id);
+    let c = await svc.getCase(t, id);
+    if (c.deleted_at) throw new DozaiError("CASE_DELETED", "this case was deleted", 410);
+    const actor = `${req.principal!.role}:${req.principal!.user_id}`;
+    if (c.status === "draft" || c.status === "ready") c = await svc.beginSession(t, id, actor);
+    const mission = await svc.getMission(t, c.mission_version);
+    const reason = typeof req.body?.reason === "string" && req.body.reason.trim().length >= 5 ? req.body.reason.trim().slice(0, 300) : "Phone call requested by staff";
+    const r = await new GatewayTools(svc).call({ session_id: `staff_${req.principal!.user_id}`.replace(/[^A-Za-z0-9_.:-]/g, "_"), tenant_id: t, case_id: id, mission_version: mission.version, employee_version: (await svc.employeeFor(mission)).version, actor }, "voice_call_request", { case_id: id, idempotency_key: `staff-${id}-${svc.now().getTime()}`, expected_version: c.version, reason });
+    if (r.error) throw new DozaiError(r.error.code, r.error.message, 422);
+    const held = !!(r.data as { held?: boolean } | undefined)?.held;
+    // Not held: ring now. Held: it waits for approval, and approving rings.
+    const now = held ? undefined : await placeCallNow(svc, t, (r.data as { outbox_id: string }).outbox_id);
+    const message = held ? "The call is waiting for approval on the Approvals page. Approving it places the call." : now?.placed ? "Calling now." : `The call could not be placed: ${now?.error ?? "unknown reason"}.`;
+    res.json({ requested: true, held, placed: !!now?.placed, message, case: await oneView(req, id) });
+  }));
+
+  // Asks the provider about unfinished calls and applies any that have finished, then lets the agent judge the answers. The page calls this
+  // while a call is in progress, so results appear without waiting for the scheduler or for the provider's callback.
+  app.post("/api/voice/sync", need("run"), wrap(async (req, res) => {
+    const v = deps.voice;
+    if (!v) return res.json({ checked: 0, applied: 0, woken: [], errors: [] });
+    const { svc, agent } = req.ctx; const t = req.principal!.tenant_id;
+    const r = await syncCalls(svc, t, v.port);
+    const woken: string[] = [];
+    if (agent.resumeCase) for (const w of r.wake) {
+      if (!(await svc.store.claim(`resume:${w.case_id}:${w.key}`))) continue; // the scheduler may have got there first
+      if (!(await svc.agentGate(t, w.case_id)).ok) continue;
+      try { await agent.resumeCase(svc, t, w.case_id); woken.push(w.case_id); } catch (e) { console.error("resume after call", (e as Error).message); }
+    }
+    res.json({ checked: r.checked, applied: r.applied, woken, errors: [...new Set(r.errors)] });
   }));
 
   // Proves the connection works: asks the provider who we are signed in as. Places no call and costs nothing.
@@ -379,7 +431,8 @@ export function createApp(deps: AppDeps) {
     if (d !== "approve" && d !== "reject") throw new DozaiError("NOT_FOUND", "unknown decision", 404);
     const note = typeof req.body?.note === "string" ? req.body.note : "";
     const o = await req.ctx.svc.decideApproval(req.principal!, String(req.params.id), d, note);
-    res.json({ outbox_id: o.outbox_id, status: o.status });
+    const now = d === "approve" && o.kind === "voice_call" ? await placeCallNow(req.ctx.svc, req.principal!.tenant_id, o.outbox_id) : undefined;
+    res.json({ outbox_id: o.outbox_id, status: now ? now.status : o.status, ...(now ? { call: now } : {}) });
   }));
 
   app.get("/api/controls", need("read"), wrap(async (req, res) => {

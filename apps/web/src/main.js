@@ -11,7 +11,7 @@ const state = {
   me: null, mission: null, cases: [], audits: [], summary: null, sessions: [],
   missions: [], defaultMission: null, missionShown: null, campaigns: [],
   employees: [], employeeCanEdit: false, employeeShown: null, employeeDef: null, ctxPreview: null,
-  voiceForm: null, voiceFormFor: null,
+  voiceForm: null, voiceFormFor: null, voicePublishing: false,
   approvals: [], approvalsWaiting: 0, controlsInfo: null, replay: null, voice: null, voiceCheck: null,
   loaded: false, error: null,
   caseFilter: "all", caseSearch: "", reviewSelected: null,
@@ -334,6 +334,7 @@ async function openCase(id) {
       <div style="display:flex;flex-wrap:wrap;gap:8px">
         ${c.stage === "Review" && can("review") ? `<button class="button primary small" id="goReview">Open review</button>` : ""}
         ${canRun ? `<button class="button primary small" id="runAgent">Run agent session</button>` : ""}
+        ${canRun && state.me?.voice && state.me.voice !== "off" ? `<button class="button ghost small" id="requestCall">Request a phone call</button>` : ""}
         ${canRun && waiting && !simulated ? `<button class="button ghost small" id="resumeAgent">Resume after reply</button>` : ""}
         ${c.stage !== "Not started" ? `<button class="button ghost small" id="viewSession">View agent session</button>` : ""}
       </div></div>
@@ -359,6 +360,10 @@ async function openCase(id) {
     const out = await act(() => api(`/cases/${id}/resume-agent`, { method: "POST" }), "Agent resumed and read the reply");
     if (out) { state.session = out.session; openCase(id); }
   });
+  $("requestCall")?.addEventListener("click", () => confirmModal({
+    title: "Request a phone call?", text: `This asks for a call to ${c.name}. It goes through the same checks as the agent's calls (consent, contact hours, attempts) and then waits for approval on the Approvals page. Nothing rings until someone approves it.`, button: "Request the call",
+    onConfirm: async () => { const out = await act(() => api(`/cases/${id}/request-call`, { method: "POST", body: { reason: "Phone call requested by staff" } }), null); if (out) { toast(out.message, "success"); openCase(id); } },
+  }));
   $("viewSession")?.addEventListener("click", () => openLastSession(id).catch(e => toast(e.message, "warning")));
   $("deleteCase")?.addEventListener("click", () => openDeleteModal(c));
   fillConversation("convBox", id);
@@ -522,6 +527,20 @@ function renderCalls() {
     <section class="card card-pad" style="margin-top:15px"><div class="card-head"><div><h2>Calls</h2><p>Most recent first. Recordings and transcripts are shown to reviewers and platform staff only.</p></div><span class="status active">${v.calls.length}</span></div>
       ${v.calls.length ? `<div style="overflow-x:auto"><table class="data-table"><thead><tr><th>Requested</th><th>Person</th><th>Result</th><th>Length</th><th>What it asked</th><th>Recording</th></tr></thead><tbody>${calls}</tbody></table></div>` : empty("No calls yet", "When the agent asks for a call and a person approves it, it appears here.")}</section>`;
 }
+// While a call is in progress, ask the server every few seconds whether it has finished, and show the result when it has.
+let callSyncBusy = false, lastSyncError = "";
+async function syncCallsNow() {
+  if (callSyncBusy || !state.loaded || !state.me || state.me.voice === "off" || !can("run")) return;
+  if (!state.voice?.calls?.some(k => k.status === "in_progress" || k.status === "scheduled")) return;
+  callSyncBusy = true;
+  try {
+    const r = await api("/voice/sync", { method: "POST" });
+    if (r.errors?.length && r.errors[0] !== lastSyncError) { lastSyncError = r.errors[0]; toast("Could not check the call at ZoLabs: " + r.errors[0], "warning"); }
+    if (r.applied > 0) { await loadAll(); toast(r.applied === 1 ? "A call finished. The answers are on the case." : r.applied + " calls finished. The answers are on the cases.", "success"); }
+  } catch { /* try again on the next beat */ } finally { callSyncBusy = false; }
+}
+setInterval(syncCallsNow, 8000);
+
 async function checkVoice() {
   try { state.voiceCheck = await api("/voice/check", { method: "POST" }); render(); toast(state.voiceCheck.ok ? "Connected to ZoLabs." : "Could not connect to ZoLabs.", state.voiceCheck.ok ? "success" : "warning"); }
   catch (e) { toast(e.message, "warning"); }
@@ -543,7 +562,7 @@ function renderApprovals() {
     ${done.length ? `<section class="card card-pad" style="margin-top:15px"><div class="card-head"><div><h2>Decided</h2><p>The most recent decisions</p></div></div>${table(done.slice(0, 30))}</section>` : ""}`;
 }
 async function decideApproval(id, decision) {
-  await act(() => api(`/approvals/${encodeURIComponent(id)}/${decision}`, { method: "POST", body: {} }), decision === "approve" ? "Approved. It goes out on the next scheduler pass." : "Declined. The case was sent to a person.");
+  await act(() => api(`/approvals/${encodeURIComponent(id)}/${decision}`, { method: "POST", body: {} }), null).then(out => { if (!out) return; toast(decision === "reject" ? "Declined. The case was sent to a person." : out.call ? (out.call.placed ? "Approved. Calling now." : `Approved, but the call could not be placed: ${out.call.error ?? "unknown reason"}.`) : "Approved. It goes out on the next scheduler pass.", out.call && !out.call.placed ? "warning" : "success"); });
 }
 
 function renderControls() {
@@ -731,7 +750,7 @@ function voiceCard(m) {
   const note = !v ? "" : v.link ? `<p style="font-size:12px;margin:8px 0">Published as form ${esc(v.link.form_id)} on ${esc(istDay(v.link.published_at))} ${esc(istTime(v.link.published_at))} by ${esc(v.link.published_by)}.${v.in_sync ? "" : " The mission or the employee has changed since, so the voice agent is working from older instructions. Publish again to update it."}</p>` : `<p style="font-size:12px;margin:8px 0">Nothing is published yet, so the agent cannot ask for a phone call on this mission.</p>`;
   const fields = !v ? "" : `<details style="margin-top:8px"><summary style="cursor:pointer;font-size:12px"><strong>What the voice agent is told</strong> (instructions and ${v.definition.form_fields.length} fields)</summary><pre style="white-space:pre-wrap;font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px;margin:6px 0">${esc(v.definition.start_message + "\n\n" + v.definition.form_context)}</pre>
     <div style="overflow-x:auto"><table class="data-table"><thead><tr><th>Field</th><th>Type</th><th>What it asks</th></tr></thead><tbody>${v.definition.form_fields.map(f => `<tr><td><code>${esc(f.field_id)}</code><small style="display:block;color:var(--muted)">${esc(f.field_name)}</small></td><td>${esc(f.datatype)}</td><td style="font-size:11px">${esc(f.additional_info)}</td></tr>`).join("")}</tbody></table></div></details>`;
-  const buttons = off ? "" : `<button class="button ghost small" data-action="voice-preview">${v ? "Refresh the preview" : "Preview the phone form"}</button>${v && state.employeeCanEdit ? `<button class="button primary small" data-action="voice-publish">${v.link ? "Update at ZoLabs" : "Create at ZoLabs"}</button>` : ""}`;
+  const buttons = off ? "" : `<button class="button ghost small" data-action="voice-preview">${v ? "Refresh the preview" : "Preview the phone form"}</button>${v && state.employeeCanEdit ? (state.voicePublishing ? `<button class="button primary small" disabled>Publishing… this can take a minute</button>` : v.link && v.in_sync ? "" : `<button class="button primary small" data-action="voice-publish">${v.link ? "Update at ZoLabs" : "Create at ZoLabs"}</button>`) : ""}`;
   return `<section class="card card-pad" style="margin-top:16px"><div class="card-head"><div><h2>Phone calls (ZoLabs)</h2><p>The form the voice agent follows for this mission. A person publishes it; the agent only asks for calls.</p></div>${status}</div>
     ${off ? `<p style="color:var(--muted);font-size:12px">Phone calls are not switched on for this platform yet.</p>` : `${note}<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">${buttons}</div>${fields}`}
     ${state.me?.voice === "simulated" ? `<small style="color:var(--muted);font-size:10px;display:block;margin-top:8px">Simulator: nobody is rung. Use the case page to finish a call yourself.</small>` : ""}</section>`;
@@ -938,7 +957,15 @@ function action(name) {
       title: update ? "Update the phone form at ZoLabs?" : "Create the phone form at ZoLabs?",
       text: `${update ? "This brings the existing form up to date with the mission and the employee." : "This creates the form and uses ZoLabs quota."} Review the preview first: it is exactly what will be sent. No call is placed by this.`,
       button: update ? "Update the form" : "Create the form",
-      onConfirm: async () => { const out = await act(() => api("/missions/" + encodeURIComponent(m.version) + "/voice-form/publish", { method: "POST", body: { confirm: true } }), null); if (out) { state.voiceForm = out; state.voiceFormFor = m.version; render(); toast("Phone form " + (update ? "updated" : "created") + ".", "success"); } },
+      onConfirm: async () => {
+        if (state.voicePublishing) return;
+        state.voicePublishing = true; render(); // the button locks at once: ZoLabs is slow, and a second click would create a second form
+        try {
+          state.voiceForm = await api("/missions/" + encodeURIComponent(m.version) + "/voice-form/publish", { method: "POST", body: { confirm: true } }); state.voiceFormFor = m.version;
+          toast("Phone form " + (update ? "updated" : "created") + ".", "success");
+        } catch (e) { toast(e.message + " Check the form state on this card before trying again.", "warning"); }
+        finally { state.voicePublishing = false; await loadVoiceForm(m.version); } // always show what the server really has, even if the answer was lost
+      },
     });
   }
   if (name === "add-mission") openMissionModal();

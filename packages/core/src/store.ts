@@ -52,6 +52,8 @@ export interface Store {
   putIdem(key: string, value: unknown): Promise<void>;
   /** Atomically take a key. Returns true only for the single caller that got it. */
   claim(key: string): Promise<boolean>;
+  /** Gives a claim back, so a short-lived lock can be taken again. Do not use it for once-only claims such as replies or calls. */
+  unclaim(key: string): Promise<void>;
   putSession(s: AgentSession): Promise<void>;
   getSession(id: string): Promise<AgentSession | undefined>;
   listSessions(tenant: string): Promise<AgentSession[]>;
@@ -174,6 +176,7 @@ export class InMemoryStore implements Store {
   async purgeAll() { const m = new Map(this.missions), e = new Map(this.employees), f = new Map(this.voiceForms), c = new Map(this.controls); this.reset(); this.missions = m; this.employees = e; this.voiceForms = f; this.controls = c; } // secrets survive too
   async getIdem(key: string) { const v = this.idem.get(key); return v === undefined ? undefined : structuredClone(v); }
   async claim(key: string) { if (this.idem.has(key)) return false; this.idem.set(key, { claimed: true }); return true; }
+  async unclaim(key: string) { this.idem.delete(key); }
   async putIdem(key: string, value: unknown) { if (!this.idem.has(key)) this.idem.set(key, structuredClone(value)); }
   async putSession(s: AgentSession) { this.sessions.set(s.session_id, structuredClone(s)); }
   async getSession(id: string) { const s = this.sessions.get(id); return s && structuredClone(s); }

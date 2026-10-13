@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { buildVoiceForm, CaseService, defaultControls, DEMO_TENANT, encryptPhone, GatewayTools, InMemoryStore, phoneHash, PLACEMENT_RETENTION_V1, VERIFICATION_EMPLOYEE_V1 } from "@dozai/core";
 import { DEFAULT_POLICY } from "@dozai/domain";
 import type { Participant } from "@dozai/contracts";
-import { dispatchVoice, FakeVoice, parseZolabsCommunication, processVoiceInbox, storeVoiceCallback, tick, ZolabsVoice, type McpCaller, type VoiceDispatchConfig, type VoicePort, type AgentRuntimePort } from "./index";
+import { dispatchVoice, FakeVoice, parseZolabsCommunication, processVoiceInbox, storeVoiceCallback, syncCalls, tick, ZolabsVoice, type McpCaller, type VoiceDispatchConfig, type VoicePort, type AgentRuntimePort } from "./index";
 
 const KEY = randomBytes(32).toString("base64");
 const PHONE = "919876543210";
@@ -303,5 +303,93 @@ describe("reading the provider's record", () => {
   it("returns nothing for a record with no id", () => {
     expect(parseZolabsCommunication({ status: "completed" })).toBeNull();
     expect(parseZolabsCommunication(null)).toBeNull();
+  });
+});
+
+describe("finding out that a call has finished without waiting for the provider to say so", () => {
+  const answered = { answers: { work_status: "I work at the same place as before", employer_name: "Acme", role_title: "Packer" }, language: "hi" };
+
+  it("applies a finished call that no callback ever announced, once", async () => {
+    const { svc, ask } = await world();
+    const voice = new FakeVoice();
+    await ask();
+    await dispatchVoice(svc, DEMO_TENANT, voice, cfg());
+    const id = voice.calls[0]!.communication_id;
+    expect(await syncCalls(svc, DEMO_TENANT, voice)).toMatchObject({ checked: 1, applied: 0, wake: [] }); // still ringing: nothing to apply
+    voice.complete(id, answered);                                                                         // the call ends; no callback is sent
+    const r = await syncCalls(svc, DEMO_TENANT, voice);
+    expect(r).toMatchObject({ checked: 1, applied: 1, wake: [{ case_id: "C-1", key: `voice:${id}` }] });
+    expect((await svc.getCase(DEMO_TENANT, "C-1")).status).toBe("evaluating");
+    expect((await svc.store.getCall(DEMO_TENANT, id))?.status).toBe("completed");
+    expect((await syncCalls(svc, DEMO_TENANT, voice)).checked).toBe(0); // nothing left to ask about
+  });
+
+  it("does not apply a call twice when the callback also arrives", async () => {
+    const { svc, ask } = await world();
+    const voice = new FakeVoice();
+    await ask();
+    await dispatchVoice(svc, DEMO_TENANT, voice, cfg());
+    const id = voice.calls[0]!.communication_id;
+    voice.complete(id, answered);
+    await syncCalls(svc, DEMO_TENANT, voice);
+    await storeVoiceCallback(svc, DEMO_TENANT, { communication_id: id });
+    await processVoiceInbox(svc, DEMO_TENANT, voice);
+    expect((await svc.store.listEvidence("C-1")).filter(e => e.question_id === "employer_name")).toHaveLength(1);
+  });
+
+  it("leaves a call that is scheduled for later alone until it is due", async () => {
+    const clock = { t: new Date("2026-10-12T10:00:00Z") };
+    const { svc, ask } = await world(() => new Date(clock.t));
+    const voice = new FakeVoice();
+    await ask({ start_at: "2026-10-12T12:00:00Z" });
+    await dispatchVoice(svc, DEMO_TENANT, voice, cfg());
+    expect((await syncCalls(svc, DEMO_TENANT, voice)).checked).toBe(0);
+    clock.t = new Date("2026-10-12T12:30:00Z");
+    expect((await syncCalls(svc, DEMO_TENANT, voice)).checked).toBe(1);
+  });
+
+  it("the scheduler pass does it too, so a finished call shows up within the hour even with no callback", async () => {
+    const { svc, ask } = await world();
+    const voice = new FakeVoice();
+    const woke: string[] = [];
+    const agent: AgentRuntimePort = { async runCase() { throw new Error("no"); }, async resumeCase(_s, _t, id) { woke.push(id); return {} as never; } };
+    await ask();
+    const deps = { piiKey: KEY, agent, voice: { port: voice, cfg: cfg() } };
+    await tick(svc, DEMO_TENANT, deps);
+    voice.complete(voice.calls[0]!.communication_id, answered);
+    const t = await tick(svc, DEMO_TENANT, deps);
+    expect(t.calls.results).toBe(1);
+    expect(woke).toEqual(["C-1"]);
+  });
+});
+
+describe("looking a call up at the provider", () => {
+  const item = (id: number, over: Record<string, unknown> = {}) => ({ communication_id: id, normalised_status: "completed", communication_status: "Completed", field_parsed_answers: { work_status: "same_job", consent_given: true, identity_confirmed: true }, collected_answers: "[1]: Hello", conversation_start_time: "2026-10-12T15:09:39", conversation_end_time: "2026-10-12T15:13:36", ...over });
+
+  it("lists the calls of the form the call belongs to, because a search by call number finds nothing", async () => {
+    const { mcp, calls } = standIn({ list_communications: () => ({ communications: [item(1013118)], pagination: { page: 1, has_next: false } }) });
+    const r = await new ZolabsVoice(mcp).fetchResult("1013118", { formId: 904 });
+    expect(r).toMatchObject({ communication_id: "1013118", status: "completed", answers: { work_status: "same_job" } });
+    expect(calls[0]).toEqual({ name: "list_communications", args: { form_id: 904, per_page: 50, page: 1 } });
+    expect(JSON.stringify(calls[0]!.args)).not.toContain("search");
+  });
+
+  it("goes on to the next page when the call is not on the first", async () => {
+    const full = Array.from({ length: 50 }, (_, i) => item(2000 + i));
+    const { mcp, calls } = standIn({ list_communications: (a: Record<string, unknown>) => ({ communications: a.page === 1 ? full : [item(1013118)] }) });
+    const r = await new ZolabsVoice(mcp).fetchResult("1013118", { formId: 904 });
+    expect(r?.communication_id).toBe("1013118");
+    expect(calls.map(c => c.args.page)).toEqual([1, 2]);
+  });
+
+  it("says the call is not there (rather than failing) when it is on no page", async () => {
+    const { mcp } = standIn({ list_communications: () => ({ communications: [item(5)] }) });
+    expect(await new ZolabsVoice(mcp).fetchResult("1013118", { formId: 904 })).toBeNull();
+  });
+
+  it("falls back to a search only when the form is not known", async () => {
+    const { mcp, calls } = standIn({ list_communications: () => ({ communications: [item(7)] }) });
+    await new ZolabsVoice(mcp).fetchResult("7");
+    expect(calls[0]!.args).toMatchObject({ search: "7" });
   });
 });

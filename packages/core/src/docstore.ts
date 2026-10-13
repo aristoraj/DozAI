@@ -188,6 +188,7 @@ export class DocStore implements Store {
   private idemId = (key: string) => key.replace(/[^A-Za-z0-9_.:\-]/g, "_").slice(0, 110);
   async getIdem(key: string) { const r = (await this.d.select({ tenant_id: "all", collection: "idem", doc_id: this.idemId(key), latestOnly: true }))[0]; return r ? JSON.parse(r.body) : undefined; }
   async claim(key: string) { return this.d.insert(this.row("idem", "all", this.idemId(key), "", 1, { claimed: true })); }
+  async unclaim(key: string) { await this.d.deleteWhere({ tenant_id: "all", collection: "idem", doc_id: this.idemId(key) }); }
   async putIdem(key: string, value: unknown) { await this.d.insert(this.row("idem", "all", this.idemId(key), "", 1, value)); }
 
   // ---- agent sessions: header doc + one row per trace step -----------------------------------

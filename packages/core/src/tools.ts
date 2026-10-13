@@ -16,6 +16,8 @@ export interface ToolSession {
   employee_version: string;
   /** The tools this session's employee may use. Set by the runtime and carried in the signed session token. Absent means no extra limit (older sessions). */
   allowed_tools?: ToolName[];
+  /** Who is acting, when it is a person using the same door (a staff-requested call). Absent means the agent of this session. */
+  actor?: string;
 }
 
 export type ToolResult = ToolEnvelope & { data?: unknown };
@@ -166,8 +168,9 @@ export class GatewayTools {
           startAt = when.toISOString();
         }
         const out = await svc.queueOutbox(c, "voice_call", { form_id: form.form_id, asked: missing?.map(m => m.key) ?? null, start_at: startAt, reason: i.reason }, i.idempotency_key);
-        await svc.emit(c, "call_requested", `agent:${s.session_id}`, `Phone call requested${startAt ? " for a later time" : ""}: ${i.reason}`, { outbox_id: out.outbox_id, asks: missing?.map(m => m.key) ?? "everything" });
-        const next = await svc.transition(c.tenant_id, c.case_id, c.version, "call_scheduled", { actor: `agent:${s.session_id}`, summary: "Phone call requested", patch: { attempts: c.attempts + 1, next_action: "The call is placed inside the approved contact hours." } });
+        const who = s.actor ?? `agent:${s.session_id}`;
+        await svc.emit(c, "call_requested", who, `Phone call requested${startAt ? " for a later time" : ""}: ${i.reason}`, { outbox_id: out.outbox_id, asks: missing?.map(m => m.key) ?? "everything" });
+        const next = await svc.transition(c.tenant_id, c.case_id, c.version, "call_scheduled", { actor: who, summary: "Phone call requested", patch: { attempts: c.attempts + 1, next_action: "The call is placed inside the approved contact hours." } });
         return this.envelope(s, op, { outbox_id: out.outbox_id, state: next.status, will_ask: missing?.map(m => m.label) ?? "every question in the form", ...(out.status === "held" ? { held: true, note: "A person must approve this call before it is placed." } : {}) });
       }
       case "decision_propose": {
