@@ -124,3 +124,36 @@ Each entry: what we decided, why, and the option we did not take.
 - **Keyboard:** Left, Right, Home and End move between tabs. On a phone the tab bar scrolls sideways and keeps the chosen tab in view.
 - **Delete case:** moved to a danger zone at the bottom of Overview, away from the everyday buttons.
 - **Width:** `min(560px, 94vw)`.
+
+## Reading free-text replies on WhatsApp (packages/core/src/classifier.ts, conversation.ts, packages/adapters/src/classifier.ts)
+
+- **Decision:** Improve the reader we have, in place. No new path, and the mission JSON, the evidence keys and the API are unchanged.
+- **A number is a pick only when it stands alone.** "2 months ago I left my job" used to select option 2 because only the first word was looked at.
+- **A label or synonym needs exactly one match and no turn-around.** "I do not work at the same place" used to match "same place".
+- **Hindi, Hinglish and Devanagari.** Devanagari vowel signs were being thrown away when a reply was cleaned, so "हाँ" became one letter. They are kept now, Devanagari digits count as digits, and yes, no, stop, "I don't know" and "what do you mean" are understood in all three ways of writing. The yes/no options carry Devanagari words.
+- **Not answers:** "no", "none", "nothing", a bare number and "I don't know" are never saved as a text answer. They are asked again, and the usual 2 re-asks then a hand-over still stops any loop.
+- **A new intent, clarify.** "What do you mean?" repeats the same question with one fixed line. It counts as a re-ask so it cannot loop. Explaining or rephrasing the question is Step 2.
+- **Several answers in one reply.** The reader returns the answer to the current question and answers to other fields, by evidence key. The runner keeps the others (in `ConversationState.held`, an optional field) and walks the flow: it saves an answer only when the question that wants it is reached by the answers so far. So an employer given while the status is still unknown is held, then used once the status is answered, and an employer given with "not working" is never saved. An answer already recorded is never replaced, and an already-answered field is not asked again.
+- **Every answer is checked twice** (in the adapter, then in the runner) with `validateAnswer`: right type, a real option, real text that is not yes/no/"I don't know", not too long.
+- **The model is asked less, and told more.** It is no longer asked for a plain pick or for stop / wrong person / distress / deletion. It is asked for sentences and for anything the rules cannot place. It gets the question, options, conditions, answers so far, the last three questions and answers, and the programme and objective.
+- **The model must show its work.** Each answer carries the exact words it relied on, and the words (and, for text, the answer) must appear in the reply, or the answer is dropped. This stops a model from inventing or translating a name.
+- **Confidence.** An answer under 0.6 is not used. A model's confidence is capped (0.85 choice, 0.7 text). A text answer typed straight into a text question still carries the old fixed 0.6, which is the lowest the requirement check accepts. That number is a convention, not a measurement.
+- **Not changed:** the model is still off unless `DOZAI_CLASSIFIER=claude`. Nothing here turns on external processing. The model never writes to a participant.
+- **"Last few messages" means** the last three questions asked and what was understood from each reply. The participant's own raw messages are not stored anywhere new.
+
+## How the conversation sounds: thank-yous, gentler re-asks, "what do you mean" (packages/core/src/phrases.ts)
+
+- **Decision:** Add a few fixed phrases around the approved questions. The questions, options, branching and the instrument's own messages are unchanged, and no model writes anything a participant sees.
+- **Where the wording lives:** in code (`phrases.ts`), not in the mission JSON, so the mission schema does not change. A mission may be given its own wording later if the programme team wants to approve it per mission.
+- **Thank-you:** after a saved answer when another question follows. Not on the first question (the start message already thanks them) and not on the closing message. Different words from one message to the next.
+- **Re-ask:** the instrument's line stays first. A hint follows: gentle and showing both ways to reply the first time, plainer the second time. After the usual 2 re-asks a person takes over, as before.
+- **"What do you mean":** how to reply, then the same question. It counts as a re-ask, so a participant who keeps asking is handed to a person and the conversation cannot loop. It does not explain the question's meaning, because explanations are mission content that someone has to approve.
+- **Language:** English, and Hindi written in English letters, picked from the participant's language. The Hindi lines avoid gendered verbs. The wording was not reviewed by a Hindi speaker.
+
+## WhatsApp and phone calls follow the same flow (packages/core/src/flow.ts, voice.ts)
+
+- **Decision:** Keep the two descriptions of a mission (the questionnaire and the list of evidence needed), and check that they agree, instead of merging them. Merging would change the mission JSON.
+- **The check:** every path through the questionnaire is listed, and for each one a call must ask the same keys in the same order. The built-in mission passes on all four branches, and the test would fail if either side drifted.
+- **Where it is enforced:** Mission Studio drafts only, where a mistake is sent back to the drafter. Making it a rule for every saved mission was tried and rejected: it blocked saving existing and hand-written missions that branch without a list of needs, which changes what people may save. `channelFlowProblems` can be called on any mission to read the differences.
+- **A call's answers follow WhatsApp's rules:** free text must be real text, an answer for a question this person would not be asked is dropped, and an unclear answer never replaces a clear one. These applied only to WhatsApp before. A voice answer whose condition cannot be checked yet is kept.
+- **Not made identical:** wording and confidence. See docs/VOICE.md.

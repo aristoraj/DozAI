@@ -27,7 +27,7 @@ A review of every module: why it exists, what was wrong, what is fixed, and what
 ### Built
 
 - A conversation runner that asks approved questions after consent, understands replies, and handles irrelevant replies, questions, stop, wrong person, distress and deletion requests. See [CONVERSATION.md](CONVERSATION.md).
-- 30-scenario gold set plus end-to-end tests of the real webhook to send path.
+- 30-scenario gold set, free-text and multi-answer scenarios, and end-to-end tests of the real webhook to send path.
 - Optional, off-by-default model assist for replies the rules cannot place; closed set of intents; cannot invent options.
 - Scheduler function (`cron_tick`) and a simulate-reply box for testing with WhatsApp off.
 - A bare "No" now means stop only while consent is being asked, not during the interview.

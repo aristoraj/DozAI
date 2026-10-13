@@ -42,8 +42,8 @@ export interface Instrument {
 }
 
 export const YESNO: QuestionOption[] = [
-  { key: "1", label: "Yes", value: "yes", synonyms: ["yes", "y", "yeah", "yep", "haan", "han", "ha", "ji", "ok", "okay", "sure"] },
-  { key: "2", label: "No", value: "no", synonyms: ["no", "n", "nope", "nahi", "nahin", "na"] },
+  { key: "1", label: "Yes", value: "yes", synonyms: ["yes", "y", "yeah", "yep", "haan", "han", "ha", "ji", "ok", "okay", "sure", "हां", "हाँ", "हा", "जी", "ठीक है"] },
+  { key: "2", label: "No", value: "no", synonyms: ["no", "n", "nope", "nahi", "nahin", "na", "nhi", "नहीं", "नही", "ना"] },
 ];
 
 export const optionsOf = (q: Question): QuestionOption[] => (q.type === "yesno" ? YESNO : q.options ?? []);

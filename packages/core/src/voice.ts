@@ -11,7 +11,7 @@
 import { createHash } from "node:crypto";
 import type { CaseRecord } from "@dozai/contracts";
 import type { EmployeeDefinition } from "./employee";
-import { matchOption } from "./classifier";
+import { matchOption, validateAnswer } from "./classifier";
 import { optionsOf, type Question } from "./instrument";
 import { evaluateRequirements } from "./requirements";
 import type { MissionBundle } from "./mission";
@@ -214,6 +214,8 @@ export function normaliseVoiceAnswer(q: Question | undefined, raw: unknown): { v
     return { value: text.slice(0, 120), confidence: 0.5 }; // said something we could not place: kept, but below the bar
   }
   // Free text was extracted from speech: clear enough to rely on, and anything that must match the programme record is still checked against it.
+  // Like a typed WhatsApp answer it must be a real answer: "no", "none" and "I don't know" say nothing, so they are not kept.
+  if (q?.type === "text" && !validateAnswer(q, { value: text.slice(0, 300) })) return null;
   return { value: text.slice(0, 300), confidence: 0.85 };
 }
 
@@ -264,11 +266,27 @@ export async function ingestVoiceResult(svc: CaseService, tenant: string, caseId
     return { applied: true, action: "wrong_person", finished: false };
   }
 
-  const answers = [];
+  // The same rules as on WhatsApp: an answer to a question this person would not be asked is not kept, and a weak answer never
+  // replaces one we already trust.
+  const before = new Map<string, { value: string; confidence: number }>();
+  for (const e of [...(await svc.store.listEvidence(caseId))].sort((a, b) => (a.at ?? "").localeCompare(b.at ?? ""))) if (e.value && e.value !== "[erased]") before.set(e.question_id, e);
+  const heard = new Map<string, { value: string; confidence: number }>();
   for (const [key, raw] of Object.entries(r.answers ?? {})) {
     if (NOT_ANSWERS.includes(key)) continue;
     const n = normaliseVoiceAnswer(questionFor(mission, key), raw);
-    if (n) answers.push({ question_id: key, value: n.value, confidence: n.confidence });
+    if (n) heard.set(key, n);
+  }
+  const minFor = (key: string) => mission.evidence_requirements?.find(x => x.key === key)?.min_confidence ?? 0.6;
+  /** What this person's answer to a question is, from this call if it was clear, else from before. */
+  const known = (key: string) => { const h = heard.get(key); return h && h.confidence >= minFor(key) ? h.value : before.get(key)?.value; };
+  const answers = [];
+  for (const [key, n] of heard) {
+    const when = mission.evidence_requirements?.find(x => x.key === key)?.when;
+    const parent = when && known(when.key);
+    if (when && parent !== undefined && !when.in.includes(parent)) continue; // not needed for this person's situation
+    const had = before.get(key);
+    if (had && had.confidence >= minFor(key) && n.confidence < minFor(key)) continue; // do not replace a clear answer with an unclear one
+    answers.push({ question_id: key, value: n.value, confidence: n.confidence });
   }
   await svc.recordInbound(tenant, caseId, {
     provider_event_id: r.communication_id, channel: "voice", summary: `Participant answered a phone call (${answers.length} answer${answers.length === 1 ? "" : "s"})`,
