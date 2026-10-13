@@ -1,5 +1,6 @@
 // Custom dropdowns. Replaces every native <select> with a styled button and list.
 // The real <select> stays hidden inside, so code that reads .value or listens for "change" keeps working.
+// An <option> may add data-short (shorter wording for the button and the list) and data-sub (a quiet second line in the list).
 
 const CHEVRON = `<svg class="cs-chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 const CHECK = `<svg class="cs-check" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.5 5 9l4.5-5.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
@@ -27,7 +28,8 @@ function enhance(select) {
   trigger.innerHTML = `<span class="cs-value"></span>${CHEVRON}`;
 
   const sync = () => {
-    const text = select.options[select.selectedIndex]?.textContent ?? "";
+    const picked = select.options[select.selectedIndex];
+    const text = picked?.dataset.short ?? picked?.textContent ?? "";
     trigger.firstChild.textContent = text;
     trigger.setAttribute("aria-label", name ? `${name}: ${text}` : text);
   };
@@ -61,7 +63,11 @@ function openMenu(select, trigger) {
     li.setAttribute("aria-selected", String(i === select.selectedIndex));
     if (option.disabled) li.setAttribute("aria-disabled", "true");
     const text = document.createElement("span");
-    text.textContent = option.textContent;
+    text.className = "cs-opt";
+    const main = document.createElement("span");
+    main.textContent = option.dataset.short ?? option.textContent;
+    text.append(main);
+    if (option.dataset.sub) { const sub = document.createElement("small"); sub.textContent = option.dataset.sub; text.append(sub); } // a quiet second line
     li.append(text);
     li.insertAdjacentHTML("beforeend", CHECK);
     li.addEventListener("mouseover", () => setActive(i));

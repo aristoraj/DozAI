@@ -99,6 +99,20 @@ describe("custom dropdown", () => {
     expect(native().value).toBe("a"); // the disabled one cannot be chosen
   });
 
+  it("an option can have shorter wording for the button and a quiet second line in the list", async () => {
+    document.body.innerHTML = html(`<option value="a" data-short="Alpha" data-sub="First letter · 1 item">Alpha · first letter (1 item)</option><option value="b" data-short="Beta">Beta · plain</option>`);
+    await flush();
+    expect(trigger().textContent).toBe("Alpha");                    // the short wording, not the long one
+    trigger().click();
+    expect(document.querySelectorAll(".cs-opt small")).toHaveLength(1);
+    expect(items()[0]!.querySelector("small")!.textContent).toBe("First letter · 1 item");
+    expect(items()[1]!.textContent).toBe("Beta");                   // no second line unless one is given
+    (items()[1] as HTMLElement).click();
+    expect(native().value).toBe("b");
+    expect(trigger().textContent).toBe("Beta");
+    expect(trigger().getAttribute("aria-label")).toBe("Letter: Beta");
+  });
+
   it("a disabled select gives a disabled button that does not open", async () => {
     document.body.innerHTML = html(undefined, "disabled");
     await flush();

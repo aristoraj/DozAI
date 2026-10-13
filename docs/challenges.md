@@ -33,6 +33,18 @@ Each problem: what we saw, why it happened, how we fixed it.
 - **Cause:** Not found. It happened once and I could not make it happen again.
 - **What to do if it comes back:** run `npx vitest run` a second time, and tell me if it fails twice.
 
+## The Command centre filter box was wider than the dropdown inside it
+
+- **Symptom:** The filter box was 553px wide but its dropdown only 320px, leaving a blank gap, and the mission name was cut off.
+- **Cause:** The dropdown's width limit was written with a percentage (`min(320px, 100%)`). A percentage cannot be used when a box is sized from its content, so the box sized itself to the whole long mission name (444px) first, and the dropdown was trimmed to 320px afterwards.
+- **Fix:** A fixed limit in pixels, so the box matches its content. The button now shows only the mission name. A test reads the stylesheet and fails if a percentage comes back.
+
+## The text boxes in "Create a mission" started one line tall
+
+- **Symptom:** The first time the form opened, its text boxes were thin one-line strips.
+- **Cause:** The boxes grow to fit their text, which means measuring them. The first draw happens while the dialog is still hidden, and a hidden box measures as zero.
+- **Fix:** Do not measure while hidden, and measure again as soon as the dialog is shown. A box never needs to measure itself to look right when it is empty.
+
 ## Still open
 
 - Nothing known on the pages that exist today. The audit that found the items above (every page and dialog, at desktop and phone width) can be run again after any UI change.
