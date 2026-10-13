@@ -27,16 +27,24 @@
         </div>
       </div>
 
-      <nav class="nav-list" id="primaryNav">
+      <nav class="nav-list" id="primaryNav" aria-label="Main">
         <button class="nav-item active" data-view="overview"><span class="nav-icon">⌂</span><span>Command centre</span></button>
-        <button class="nav-item" data-view="cases"><span class="nav-icon">▦</span><span>Cases</span><span class="nav-count" id="caseCount">0</span></button>
-        <button class="nav-item" data-view="campaigns"><span class="nav-icon">↗</span><span>Campaigns</span></button>
-        <button class="nav-item" data-view="reviews"><span class="nav-icon">✓</span><span>Review queue</span><span class="nav-count coral" id="reviewCount">0</span></button>
-        <button class="nav-item" data-view="approvals"><span class="nav-icon">☑</span><span>Approvals</span><span class="nav-count coral" id="approvalCount">0</span></button>
-        <button class="nav-item" data-view="calls"><span class="nav-icon">☎</span><span>Phone calls</span></button>
-        <button class="nav-item" data-view="agent"><span class="nav-icon">AI</span><span>Claude engine</span></button>
-        <button class="nav-item" data-view="missions"><span class="nav-icon">◎</span><span>Mission</span></button>
-        <button class="nav-item" data-view="audit"><span class="nav-icon">≡</span><span>Audit trail</span></button>
+        <div class="nav-group" role="group" aria-label="Set up"><span class="nav-group-label" aria-hidden="true">Set up</span>
+          <button class="nav-item" data-view="missions"><span class="nav-icon">◎</span><span>Mission</span></button>
+          <button class="nav-item" data-view="agent"><span class="nav-icon">AI</span><span>Claude engine</span></button>
+        </div>
+        <div class="nav-group" role="group" aria-label="Reach people"><span class="nav-group-label" aria-hidden="true">Reach people</span>
+          <button class="nav-item" data-view="cases"><span class="nav-icon">▦</span><span>Cases</span><span class="nav-count" id="caseCount">0</span></button>
+          <button class="nav-item" data-view="campaigns"><span class="nav-icon">↗</span><span>Campaigns</span></button>
+        </div>
+        <div class="nav-group" role="group" aria-label="Follow up"><span class="nav-group-label" aria-hidden="true">Follow up</span>
+          <button class="nav-item" data-view="approvals"><span class="nav-icon">☑</span><span>Approvals</span><span class="nav-count coral" id="approvalCount">0</span></button>
+          <button class="nav-item" data-view="calls"><span class="nav-icon">☎</span><span>Phone calls</span></button>
+          <button class="nav-item" data-view="reviews"><span class="nav-icon">✓</span><span>Review queue</span><span class="nav-count coral" id="reviewCount">0</span></button>
+        </div>
+        <div class="nav-group" role="group" aria-label="Record"><span class="nav-group-label" aria-hidden="true">Record</span>
+          <button class="nav-item" data-view="audit"><span class="nav-icon">≡</span><span>Audit trail</span></button>
+        </div>
       </nav>
 
       <div class="sidebar-spacer"></div>

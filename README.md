@@ -37,9 +37,11 @@ Everything runs on **synthetic data** (12 sample cases). Do not load real partic
 | `src/select.js` | Custom dropdowns. Styles every `<select>` automatically, keeping the real one hidden inside (why: [docs/decisions.md](docs/decisions.md)) |
 | `src/number.js` | Custom number fields. Hides the browser's arrows and adds "−" and "+" buttons around the real input |
 | `src/file.js` | Custom file picker. A styled button and the file name, with the real input hidden inside |
+| `src/dashboard.js` | The Command centre's mission filter: which cases a mission keeps, the counting rules (the same as the server's summary), and the small motion that eases the numbers, bars and donut into place |
 | `src/styles.css` | All styling: colours and the type scale at the top, one look for every form field, then each screen |
 | `src/ui.test.ts` | Clicks through the real page against the real API (in memory, fake data) |
 | `src/select.test.ts`, `number.test.ts`, `file.test.ts` | Tests for the custom controls with fake data |
+| `src/dashboard.test.ts` | Tests for the counting rules and the motion, with fake data |
 
 ## Status
 

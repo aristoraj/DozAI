@@ -2,6 +2,7 @@
 import { initSelects } from "./select.js";
 import { initNumbers } from "./number.js";
 import { initFiles } from "./file.js";
+import { ALL, OUTCOMES, casesFor, dashboardFor, donutGradient, paintDashboard } from "./dashboard.js";
 const API_BASE = (window.DOZAI_API_BASE || "/api").replace(/[/]$/, "");
 const CLOUD = API_BASE.startsWith("/server");
 const TZ = "Asia/Kolkata"; // all times are shown in India Standard Time
@@ -10,7 +11,7 @@ const palette = ["#f4c7b7", "#b9e3df", "#ead6a8", "#d7cfeb", "#bcd7ea", "#f1c0cd
 const ALLOWED = { intake: ["admin", "operator"], run: ["admin", "agent_ops", "operator"], review: ["admin", "reviewer"], admin: ["admin"], approve: ["admin", "reviewer", "agent_ops"], controls: ["admin", "agent_ops"], killswitch: ["admin", "agent_ops", "operator"] };
 
 const state = {
-  view: "overview", localRole: "admin",
+  view: "overview", localRole: "admin", dashMission: ALL, caseTab: "overview", caseTabFor: null,
   me: null, mission: null, cases: [], audits: [], summary: null, sessions: [],
   missions: [], defaultMission: null, missionShown: null, campaigns: [],
   employees: [], employeeCanEdit: false, employeeShown: null, employeeDef: null, ctxPreview: null,
@@ -133,49 +134,98 @@ function render() {
 }
 
 // ---- command centre -----------------------------------------------------------------------------------------------------------
+// ---- command centre ------------------------------------------------------------------------------------------------------------
+// One mission filter. Everything below it is counted over that mission's cases, with the same rules as the server's summary.
+const dashKey = () => (state.missions.some(m => m.version === state.dashMission) ? state.dashMission : ALL);
+
+/** Everything the page shows for the chosen mission. The first draw and the in-place updates both use it. */
+function overviewModel() {
+  const key = dashKey();
+  const d = dashboardFor({ cases: state.cases, missions: state.missions, campaigns: state.campaigns, audits: state.audits, key });
+  const s = d.summary, picked = state.missions.find(x => x.version === key);
+  const signedOff = (picked ?? state.mission).instrument_signed_off;
+  const pct = n => (s.total ? Math.round((n / s.total) * 100) : 0);
+  const items = [];
+  if (s.review) items.push(["!", `${plural(s.review, "case")} need${s.review === 1 ? "s" : ""} a person's decision`, "Evidence conflict or low confidence", "reviews"]);
+  if (d.paused.length) items.push(["!", `${plural(d.paused.length, "campaign")} paused`, d.paused[0].pause_reason || "Resume it from the Campaigns page", "campaigns"]);
+  if (d.waiting) items.push(["↗", `${plural(d.waiting, "case")} ${d.waiting === 1 ? "is" : "are"} waiting for a reply`, "Check for replies on the Cases page", "cases"]);
+  if (state.mission.runtime.whatsapp !== "live") items.push(["◇", "WhatsApp sending is off", "The agent runs with simulated replies. Nothing is sent to anyone.", "missions"]);
+  if (!signedOff) items.push(["?", "The questionnaire wording is not signed off", "The questions are placeholders until the programme team approves them", "missions"]);
+  return {
+    key, empty: !s.total, s,
+    kpis: { total: s.total, reached: pct(s.reached), confirmed: s.confirmed, review: s.review },
+    foots: { total: "loaded", reached: `${s.reached} of ${s.total}`, confirmed: `${s.complete} completed`, review: s.review ? "waiting for review" : "all clear", reviewTone: !!s.review },
+    stages: { total: s.total, reached: s.reached, responded: s.responded, complete: s.complete, confirmed: s.confirmed },
+    stagePct: { total: pct(s.total), reached: pct(s.reached), responded: pct(s.responded), complete: pct(s.complete), confirmed: pct(s.confirmed) },
+    mix: s.mix, mixTotal: Object.values(s.mix).reduce((a, b) => a + b, 0),
+    attentionHtml: items.length ? items.map(([i, t, sub, go]) => `<button class="attention-item" style="border:0;width:100%;text-align:left;cursor:pointer" data-go="${go}"><span class="attention-icon">${i}</span><span><strong>${esc(t)}</strong><small>${esc(sub)}</small></span><span>›</span></button>`).join("") : `<p class="muted t-sm">Nothing needs attention.</p>`,
+    activityHtml: d.activity.slice(0, 5).map(timelineEvent).join("") || `<p class="muted t-sm">${key === ALL ? "No activity yet." : "No recent activity for this mission."}</p>`,
+    caption: `Showing ${plural(s.total, "participant")} for ${picked ? picked.name : "all missions"}.`,
+    countLine: picked ? `Showing ${s.total} of ${plural(state.cases.length, "participant")}` : `Showing all ${plural(s.total, "participant")}`,
+  };
+}
+
+/** The filter bar under the greeting: the mission, a way back to everyone, and what is being shown. */
+function missionBarHtml(md) {
+  const count = v => casesFor(state.cases, state.missions, v).length;
+  const option = m => `<option value="${esc(m.version)}" data-short="${esc(m.name)}" data-sub="${esc(`${m.version} · ${plural(count(m.version), "participant")}`)}" ${m.version === md.key ? "selected" : ""}>${esc(m.name)} · ${esc(m.version)} (${plural(count(m.version), "participant")})</option>`;
+  return `<div class="dash-bar"><label class="dash-filter ${md.key === ALL ? "" : "is-active"}"><span>Mission</span><select id="dashMission" class="filter-select" aria-label="Filter the Command centre by mission"><option value="${ALL}" data-short="All missions" data-sub="${esc(plural(state.cases.length, "participant"))}" ${md.key === ALL ? "selected" : ""}>All missions (${plural(state.cases.length, "participant")})</option>${state.missions.map(option).join("")}</select></label><button type="button" class="text-button dash-clear" data-dash-clear ${md.key === ALL ? "hidden" : ""}>Clear</button><span class="dash-count" id="dashCount">${esc(md.countLine)}</span></div>`;
+}
+
+/** Keeps the bar in step with the choice without redrawing it (so the open dropdown and its motion are not disturbed). */
+function updateMissionBar(md) {
+  const filter = appView.querySelector(".dash-filter");
+  if (!filter) return;
+  filter.classList.toggle("is-active", md.key !== ALL);
+  appView.querySelector("[data-dash-clear]").hidden = md.key === ALL;
+  $("dashCount").textContent = md.countLine;
+}
+
 function renderOverview() {
-  const s = state.summary, m = state.mission, cases = state.cases;
+  const md = overviewModel();
   const name = (state.me?.user || "").split("@")[0].split(/[._-]/)[0];
   const greeting = `Hello${name ? ", " + name.charAt(0).toUpperCase() + name.slice(1) : ""}.`;
   const head = pageHead("Command centre", greeting, "What is moving, what needs a person, and what happens next.", can("intake") ? `<button class="button primary" data-action="import">Add participants</button>` : "");
-  if (!s.total) {
-    return `${head}${empty("No participants yet", can("intake") ? "Load your first cohort to start. Participant contact numbers are encrypted when stored." : "Ask an administrator or operator to load participants.", can("intake") ? `<button class="button primary" data-action="import">Add participants</button>` : "")}`;
+  const bar = missionBarHtml(md);
+  const live = `<p class="sr-only" id="dashLive" aria-live="polite">${esc(md.caption)}</p>`;
+  if (md.empty) {
+    return `${head}${bar}${live}${empty(md.key === ALL ? "No participants yet" : "No participants in this mission yet", can("intake") ? "Load your first cohort to start. Participant contact numbers are encrypted when stored." : "Ask an administrator or operator to load participants.", can("intake") ? `<button class="button primary" data-action="import">Add participants</button>` : "")}`;
   }
-  const pct = n => Math.round((n / s.total) * 100);
-  const mix = s.mix, mixTotal = mix.same_job + mix.changed_job + mix.not_employed + mix.other;
-  const colors = [["#2c7771", "Same job", mix.same_job], ["#e8967a", "Changed job", mix.changed_job], ["#e5aa57", "Not employed", mix.not_employed], ["#b8aaa2", "Other or unresolved", mix.other]];
-  let acc = 0;
-  const donut = mixTotal ? `conic-gradient(${colors.map(([c, , n]) => { const from = (acc / mixTotal) * 360; acc += n; return `${c} ${from}deg ${(acc / mixTotal) * 360}deg`; }).join(",")})` : "var(--line)";
-  const waiting = cases.filter(c => c.status === "progress").length;
-  const items = [];
-  if (s.review) items.push(["!", `${plural(s.review, "case")} need${s.review === 1 ? "s" : ""} a person's decision`, "Evidence conflict or low confidence", "reviews"]);
-  const paused = state.campaigns.filter(c => c.status === "paused");
-  if (paused.length) items.push(["!", `${plural(paused.length, "campaign")} paused`, paused[0].pause_reason || "Resume it from the Campaigns page", "campaigns"]);
-  if (waiting) items.push(["↗", `${plural(waiting, "case")} ${waiting === 1 ? "is" : "are"} waiting for a reply`, "Check for replies on the Cases page", "cases"]);
-  if (m.runtime.whatsapp !== "live") items.push(["◇", "WhatsApp sending is off", "The agent runs with simulated replies. Nothing is sent to anyone.", "missions"]);
-  if (!m.instrument_signed_off) items.push(["?", "The questionnaire wording is not signed off", "The questions are placeholders until the programme team approves them", "missions"]);
-  return `${head}
+  const { kpis, foots, stages, stagePct, mix, mixTotal } = md;
+  const stage = (key, label) => `<div class="stage-row" data-stage="${key}"><strong>${label}</strong><div class="progress-track"><div class="progress-fill" style="width:${stagePct[key]}%"></div></div><span data-stage-count data-shown="${stages[key]}">${stages[key]}</span></div>`;
+  const values = OUTCOMES.map(([k]) => mix[k]);
+  return `${head}${bar}${live}<div data-overview>
     <div class="grid kpis">
-      ${kpi("Participants", s.total, "loaded", "#e4f5f3")}
-      ${kpi("Contacted", `${pct(s.reached)}%`, `${s.reached} of ${s.total}`, "#fae8dc")}
-      ${kpi("Outcomes confirmed", s.confirmed, `${s.complete} completed`, "#e4f5f3")}
-      ${kpi("Needs a person", s.review, s.review ? "waiting for review" : "all clear", "#fff1d9", s.review ? "amber" : "")}
+      ${kpi("Participants", "total", kpis.total, kpis.total, foots.total, "#e4f5f3")}
+      ${kpi("Contacted", "reached", `${kpis.reached}%`, kpis.reached, foots.reached, "#fae8dc")}
+      ${kpi("Outcomes confirmed", "confirmed", kpis.confirmed, kpis.confirmed, foots.confirmed, "#e4f5f3")}
+      ${kpi("Needs a person", "review", kpis.review, kpis.review, foots.review, "#fff1d9", foots.reviewTone ? "amber" : "")}
     </div>
     <div class="grid two">
       <section class="card card-pad"><div class="card-head"><div><h2>Progress</h2><p>How far participants have moved</p></div><button class="text-button" data-go="cases">Open cases →</button></div>
-        <div class="stage-list">${[["Loaded", s.total], ["Contacted", s.reached], ["Responded", s.responded], ["Completed", s.complete], ["Confirmed", s.confirmed]].map(([l, n]) => `<div class="stage-row"><strong>${l}</strong><div class="progress-track"><div class="progress-fill" style="width:${pct(n)}%"></div></div><span>${n}</span></div>`).join("")}</div></section>
+        <div class="stage-list">${stage("total", "Loaded")}${stage("reached", "Contacted")}${stage("responded", "Responded")}${stage("complete", "Completed")}${stage("confirmed", "Confirmed")}</div></section>
       <section class="card card-pad"><div class="card-head"><div><h2>Outcomes</h2><p>Where participants are now</p></div></div>
-        <div class="donut-wrap"><div class="donut-holder"><div class="donut" style="background:${donut}"></div><div class="donut-centre"><strong>${mixTotal}</strong><small>classified</small></div></div>
-        <div class="legend">${colors.map(([c, l, n]) => `<div class="legend-item"><span class="legend-dot" style="background:${c}"></span><span>${l}</span><strong>${n}</strong></div>`).join("")}</div></div></section>
+        <div class="donut-wrap"><div class="donut-holder"><div class="donut" data-donut data-values="${JSON.stringify(values)}" style="background:${donutGradient(values)}"></div><div class="donut-centre"><strong data-donut-centre>${mixTotal}</strong><small>classified</small></div></div>
+        <div class="legend">${OUTCOMES.map(([k, l, c]) => `<div class="legend-item"><span class="legend-dot" style="background:${c}"></span><span>${l}</span><strong data-mix="${k}">${mix[k]}</strong></div>`).join("")}</div></div></section>
     </div>
     <div class="grid two-even" style="margin-top:16px">
       <section class="card card-pad"><div class="card-head"><div><h2>Needs attention</h2><p>Only what needs a decision or a setting</p></div></div>
-        <div class="attention-list">${items.length ? items.map(([i, t, sub, go]) => `<button class="attention-item" style="border:0;width:100%;text-align:left;cursor:pointer" data-go="${go}"><span class="attention-icon">${i}</span><span><strong>${esc(t)}</strong><small>${esc(sub)}</small></span><span>›</span></button>`).join("") : `<p class="muted t-sm">Nothing needs attention.</p>`}</div></section>
+        <div class="attention-list dash-swap" data-dash="attention">${md.attentionHtml}</div></section>
       <section class="card card-pad"><div class="card-head"><div><h2>Recent activity</h2><p>Every action is recorded</p></div><button class="text-button" data-go="audit">Audit trail →</button></div>
-        <div class="timeline">${state.audits.slice(0, 5).map(timelineEvent).join("") || `<p class="muted t-sm">No activity yet.</p>`}</div></section>
-    </div>`;
+        <div class="timeline dash-swap" data-dash="activity">${md.activityHtml}</div></section>
+    </div></div>`;
 }
-const kpi = (label, value, foot, soft, tone = "") => `<section class="card kpi-card" style="--accent-soft:${soft}"><div class="kpi-label">${esc(label)}</div><div class="kpi-value">${esc(value)}</div><div class="kpi-foot"><span class="delta ${tone}">${esc(foot)}</span></div></section>`;
+const kpi = (label, hook, value, shown, foot, soft, tone = "") => `<section class="card kpi-card" style="--accent-soft:${soft}"><div class="kpi-label">${esc(label)}</div><div class="kpi-value" data-kpi="${hook}" data-shown="${shown}">${esc(value)}</div><div class="kpi-foot"><span class="delta ${tone}" data-kpi-foot="${hook}">${esc(foot)}</span></div></section>`;
+
+/** The filter changed. Update the page in place so the numbers, bars and donut can move. Draw it again only when its shape changes (empty or not). */
+function refreshOverview() {
+  const md = overviewModel();
+  const root = appView.querySelector("[data-overview]");
+  if (md.empty || !root) { render(); return; }
+  paintDashboard(root, md, { after: bindGo });
+  updateMissionBar(md);
+  const live = $("dashLive"); if (live) live.textContent = md.caption;
+}
 const timelineEvent = a => `<div class="timeline-event"><span class="event-dot ${a.tone === "coral" ? "coral" : ""}">${esc(a.icon)}</span><span class="event-copy"><strong>${esc(a.action)}</strong><small>${esc(a.detail)}</small></span><span class="event-time">${esc(a.time)}</span></div>`;
 
 // ---- cases ---------------------------------------------------------------------------------------------------------------------------------
@@ -331,39 +381,60 @@ function openMissionModal(prefill) {
 }
 
 // ---- case drawer ---------------------------------------------------------------------------------------------------------------------------
+/** Shows one tab of the case panel and hides the others. The hidden ones stay on the page, so they keep loading. */
+function showCaseTab(key, focus = false) {
+  state.caseTab = key;
+  caseDrawer.querySelectorAll("[data-tab]").forEach(b => { const on = b.dataset.tab === key; b.setAttribute("aria-selected", String(on)); b.tabIndex = on ? 0 : -1; if (on && focus) b.focus(); if (on) b.scrollIntoView?.({ block: "nearest", inline: "nearest" }); }); // on a phone the tab bar scrolls sideways: keep the chosen tab in view
+  caseDrawer.querySelectorAll("[data-panel]").forEach(p => { p.hidden = p.dataset.panel !== key; });
+  const bar = caseDrawer.querySelector(".drawer-tabs");
+  if (bar && caseDrawer.scrollTop > bar.offsetTop) caseDrawer.scrollTop = bar.offsetTop; // the top of the new tab is in view
+}
+/** A small number on a tab, shown only when there is something in it. */
+function setTabCount(key, n) {
+  const el = caseDrawer.querySelector(`[data-tab-count="${key}"]`);
+  if (el) { el.textContent = !n ? "" : n > 99 ? "99+" : String(n); el.hidden = !n; }
+}
 async function openCase(id) {
   const c = state.cases.find(x => x.id === id);
   if (!c) return;
   const simulated = state.me?.channel !== "interakt";
   const waiting = ["Contacting", "Follow-up"].includes(c.stage);
   const canRun = can("run") && c.stage !== "Complete" && c.stage !== "Review";
-  caseDrawer.innerHTML = `<div class="drawer-head"><div><div class="eyebrow">Participant case</div><h2>${esc(c.name)}</h2><p>${esc(c.id)} · ${esc(c.cohort)} · ${esc(c.location)}</p></div><button class="close-button" id="closeDrawer" aria-label="Close case">×</button></div><div class="drawer-body">
-    <div class="case-summary"><div class="summary-box"><small>Status</small><strong>${esc(STATUS_LABEL[c.status])}</strong></div><div class="summary-box"><small>Outcome</small><strong>${esc(c.outcome)}</strong></div><div class="summary-box"><small>Confidence</small><strong>${c.confidence}%</strong></div></div>
+  state.caseTab = state.caseTabFor === id ? state.caseTab : "overview"; // an action that refreshes the panel keeps you on your tab
+  state.caseTabFor = id;
+  const tab = state.caseTab;
+  const TABS = [["overview", "Overview"], ["conversation", "Conversation"], ["calls", "Phone calls"], ["activity", "Activity"]];
+  const panel = (key, html) => `<div class="drawer-panel" role="tabpanel" id="panel-${key}" data-panel="${key}" aria-labelledby="tab-${key}" ${key === tab ? "" : "hidden"}>${html}</div>`;
+  const kv = (label, value) => `<div class="kv-row"><dt>${label}</dt><dd>${esc(value)}</dd></div>`;
+  caseDrawer.innerHTML = `<div class="drawer-head"><span class="mini-avatar drawer-avatar" style="background:${colorFor(c.id)}">${esc(initials(c.name))}</span><div class="drawer-title"><div class="eyebrow">Participant case</div><h2>${esc(c.name)}</h2><p>${esc(c.id)} · ${esc(c.cohort)} · ${esc(c.location)}</p><div class="drawer-status">${statusPill(c.status)}</div></div><button class="close-button" id="closeDrawer" aria-label="Close case">×</button></div><div class="drawer-body">
+    <div class="case-summary"><div class="summary-box"><small>Status</small><strong>${esc(STATUS_LABEL[c.status])}</strong></div><div class="summary-box"><small>Outcome</small><strong>${esc(c.outcome)}</strong></div><div class="summary-box"><small>Confidence</small><strong>${c.confidence}%</strong><span class="summary-bar"><span style="width:${Math.max(0, Math.min(100, c.confidence))}%"></span></span></div></div>
     <div class="next-action"><small>Next permitted action</small><h3>${esc(c.stage === "Complete" ? "Case is complete" : c.stage === "Review" ? "A person must decide" : c.stage === "Not started" ? "Ready to start" : "Waiting")}</h3><p>${esc(c.next)}</p>
-      ${canRun && simulated ? `<label class="t-xs muted" style="display:block;margin:10px 0 4px" for="scenarioSelect">Simulated participant reply (WhatsApp is off)</label><select id="scenarioSelect" class="filter-select" style="width:100%;margin-bottom:8px"><option value="same_job">Same job</option><option value="changed_job">Changed job</option><option value="employer_conflict">Employer name conflict</option><option value="not_employed">Not employed</option><option value="opt_out">Opts out</option><option value="no_response">No response</option></select>` : ""}
+      ${canRun && simulated ? `<div class="sim-row"><label for="scenarioSelect">Simulated participant reply (WhatsApp is off)</label><select id="scenarioSelect" class="filter-select"><option value="same_job">Same job</option><option value="changed_job">Changed job</option><option value="employer_conflict">Employer name conflict</option><option value="not_employed">Not employed</option><option value="opt_out">Opts out</option><option value="no_response">No response</option></select></div>` : ""}
       ${canRun && !simulated ? `<p class="t-xs muted" style="margin:10px 0 8px">WhatsApp is live. The agent sends the approved message to this participant and waits for a real reply.</p>` : ""}
-      <div style="display:flex;flex-wrap:wrap;gap:8px">
+      <div class="next-buttons">
         ${c.stage === "Review" && can("review") ? `<button class="button primary small" id="goReview">Open review</button>` : ""}
         ${canRun ? `<button class="button primary small" id="runAgent">Run agent session</button>` : ""}
         ${canRun && state.me?.voice && state.me.voice !== "off" ? `<button class="button ghost small" id="requestCall">Request a phone call</button>` : ""}
         ${canRun && waiting && !simulated ? `<button class="button ghost small" id="resumeAgent">Resume after reply</button>` : ""}
         ${c.stage !== "Not started" ? `<button class="button ghost small" id="viewSession">View agent session</button>` : ""}
       </div></div>
-    <div class="drawer-section"><h3>What we need to know</h3><div id="reqBox"><p class="muted t-sm">Loading…</p></div></div>
-    <div class="drawer-section"><h3>Participant</h3><div class="evidence-grid">
-      <div class="evidence-card"><small>Phone</small><strong>${esc(c.phone)}</strong></div>
-      <div class="evidence-card"><small>Programme record employer</small><strong>${esc(c.recorded_employer)}</strong></div>
-      <div class="evidence-card"><small>Reported employer</small><strong>${esc(c.employer)}</strong></div>
-      <div class="evidence-card"><small>Case owner</small><strong>${esc(c.owner)}</strong></div>
-      <div class="evidence-card"><small>Mission</small><strong>${esc(missionName(c.mission_version ?? state.missions[0]?.version))}</strong></div></div></div>
-    <div class="drawer-section"><h3>Conversation</h3><div id="convBox"><p class="muted t-sm">Loading…</p></div>${simulated && can("run") && c.stage !== "Complete" ? `<div style="display:flex;gap:8px;margin-top:10px"><input id="simText" placeholder="Type a participant reply (simulated)" class="t-sm" style="flex:1" /><button class="button primary small" id="simSend">Send</button></div><small class="muted t-xs">WhatsApp is off. This goes through the same conversation logic as a real reply.</small>` : ""}</div>
-    <div class="drawer-section"><h3>Phone calls</h3><div id="callBox"><p class="muted t-sm">Loading…</p></div></div>
-    <div class="drawer-section"><h3>Agent notes</h3><div id="agentBox"><p class="muted t-sm">Loading…</p></div></div>
-    <div class="drawer-section"><h3>Case history</h3><div class="timeline" id="caseHistory"><p class="muted t-sm">Loading…</p></div></div>
-    ${can("admin") ? `<div class="drawer-section"><h3>Danger zone</h3><p class="t-sm muted" style="margin:0 0 10px">Deleting erases this participant's name, number, replies and evidence. The case stays only as an anonymous entry in the audit trail. This cannot be undone.</p><button class="button ghost small" id="deleteCase" style="color:#b64b48;border-color:#b64b48">Delete case…</button></div>` : ""}
+    <div class="drawer-tabs" role="tablist" aria-label="Case sections">${TABS.map(([k, label]) => `<button type="button" class="drawer-tab" role="tab" id="tab-${k}" data-tab="${k}" aria-controls="panel-${k}" aria-selected="${k === tab}" tabindex="${k === tab ? 0 : -1}">${label}<span class="tab-count" data-tab-count="${k}" hidden></span></button>`).join("")}</div>
+    ${panel("overview", `<div class="drawer-section"><h3>What we need to know</h3><div id="reqBox"><p class="muted t-sm">Loading…</p></div></div>
+      <div class="drawer-section"><h3>Participant</h3><dl class="kv">${kv("Phone", c.phone)}${kv("Programme record employer", c.recorded_employer)}${kv("Reported employer", c.employer)}${kv("Case owner", c.owner)}${kv("Mission", missionName(c.mission_version ?? state.missions[0]?.version))}</dl></div>
+      ${can("admin") ? `<div class="drawer-section danger-zone"><h3>Danger zone</h3><p class="t-sm muted" style="margin:0 0 10px">Deleting erases this participant's name, number, replies and evidence. The case stays only as an anonymous entry in the audit trail. This cannot be undone.</p><button class="button ghost small" id="deleteCase" style="color:#b64b48;border-color:#b64b48">Delete case…</button></div>` : ""}`)}
+    ${panel("conversation", `<div id="convBox"><p class="muted t-sm">Loading…</p></div>${simulated && can("run") && c.stage !== "Complete" ? `<div style="display:flex;gap:8px;margin-top:10px"><input id="simText" placeholder="Type a participant reply (simulated)" class="t-sm" style="flex:1" /><button class="button primary small" id="simSend">Send</button></div><small class="muted t-xs">WhatsApp is off. This goes through the same conversation logic as a real reply.</small>` : ""}`)}
+    ${panel("calls", `<div id="callBox"><p class="muted t-sm">Loading…</p></div>`)}
+    ${panel("activity", `<div class="drawer-section"><h3>Agent notes</h3><div id="agentBox"><p class="muted t-sm">Loading…</p></div></div>
+      <div class="drawer-section"><h3>Case history</h3><div class="timeline" id="caseHistory"><p class="muted t-sm">Loading…</p></div></div>`)}
   </div>`;
   caseDrawer.classList.add("open"); caseDrawer.setAttribute("aria-hidden", "false"); drawerBackdrop.hidden = false;
   $("closeDrawer").addEventListener("click", closeDrawer);
+  caseDrawer.querySelectorAll("[data-tab]").forEach(b => b.addEventListener("click", () => showCaseTab(b.dataset.tab)));
+  caseDrawer.querySelector(".drawer-tabs").addEventListener("keydown", e => {
+    const keys = ["overview", "conversation", "calls", "activity"], at = keys.indexOf(state.caseTab);
+    const next = { ArrowRight: keys[(at + 1) % keys.length], ArrowLeft: keys[(at + keys.length - 1) % keys.length], Home: keys[0], End: keys.at(-1) }[e.key];
+    if (next) { e.preventDefault(); showCaseTab(next, true); }
+  });
   $("goReview")?.addEventListener("click", () => { closeDrawer(); state.reviewSelected = id; go("reviews"); });
   $("runAgent")?.addEventListener("click", () => runAgent(id, $("scenarioSelect")?.value || "same_job"));
   $("resumeAgent")?.addEventListener("click", async () => {
@@ -390,6 +461,7 @@ async function openCase(id) {
     const d = await api(`/cases/${id}`);
     const box = $("caseHistory");
     if (box) box.innerHTML = d.events.map(withIst).reverse().map(timelineEvent).join("") || `<p class="muted t-sm">No history.</p>`;
+    setTabCount("activity", d.events.length); setTabCount("calls", d.calls?.length ?? 0);
     const rb = $("reqBox"); if (rb) rb.innerHTML = requirementsHtml(d.requirements);
     const ab = $("agentBox"); if (ab) { ab.innerHTML = agentNotesHtml(d); ab.querySelectorAll("[data-approve]").forEach(b => b.addEventListener("click", async () => { await decideApproval(b.dataset.approve, "approve"); openCase(id); })); ab.querySelectorAll("[data-reject]").forEach(b => b.addEventListener("click", async () => { await decideApproval(b.dataset.reject, "reject"); openCase(id); })); }
     const cb = $("callBox"); if (cb) { cb.innerHTML = callsHtml(d.calls); cb.querySelectorAll("[data-simcall]").forEach(b => b.addEventListener("click", () => simulateCall(id, b.dataset.simcall))); }
@@ -437,6 +509,7 @@ async function fillConversation(boxId, caseId) {
     const d = await api(`/cases/${caseId}/conversation`);
     const box = $(boxId); if (!box) return;
     const bubbles = d.messages.map(x => `<div style="display:flex;justify-content:${x.from === "participant" ? "flex-end" : "flex-start"};margin:6px 0"><div class="t-sm" style="max-width:85%;padding:8px 11px;border-radius:12px;white-space:pre-wrap;background:${x.from === "participant" ? "var(--teal-soft)" : "var(--surface)"};border:1px solid var(--line)">${esc(x.text)}</div></div>`).join("");
+    setTabCount("conversation", d.messages.length);
     box.innerHTML = `<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:6px"><span class="status ${d.status === "escalated" ? "review" : d.status === "done" ? "confirmed" : "progress"}">${esc(CONV_LABEL[d.status] || d.status)}</span><small style="color:var(--muted)">${d.answered} answered${d.reasks ? ` · ${d.reasks} re-asked` : ""}</small></div>${d.escalation_reason ? `<p class="t-sm danger-text" style="margin:4px 0">Needs a person: ${esc(d.escalation_reason.replace(/_/g, " "))}</p>` : ""}${bubbles || `<p class="muted t-sm">No questions have been asked yet. The interview starts when the participant agrees to continue.</p>`}`;
   } catch (e) { const box = $(boxId); if (box) box.innerHTML = `<p class="muted t-sm">${esc(e.message)}</p>`; }
 }
@@ -513,30 +586,51 @@ const mmss = s => (s == null ? "—" : `${Math.floor(s / 60)}:${String(Math.roun
 function renderCalls() {
   const v = state.voice;
   if (!v) return empty("Loading phone calls…", "Reading the connection and the calls.");
-  const kind = { zolabs: "ZoLabs, live", simulated: "Simulator: nobody is rung", off: "Not connected" }[v.kind] || v.kind;
+  const [kindTone, kindLabel] = { zolabs: ["ok", "ZoLabs, live"], simulated: ["warn", "Simulator: nobody is rung"], off: ["off", "Not connected"] }[v.kind] || ["off", v.kind];
   const chk = state.voiceCheck;
-  const checkNote = chk ? (chk.ok ? `<p class="t-sm" style="margin:8px 0;color:var(--sys)">Connected. Signed in as ${esc(typeof chk.account === "string" ? chk.account : chk.account?.email || chk.account?.name || chk.account?.account || JSON.stringify(chk.account).slice(0, 120))}.</p>` : `<p class="t-sm danger-text" style="margin:8px 0">Could not connect: ${esc(chk.error)}</p>`) : "";
-  const forms = v.forms.map(f => `<tr><td><strong>${esc(f.name)}</strong><small style="display:block;color:var(--muted)">${esc(f.mission_version)}</small></td><td>${f.form_id ? esc(f.form_id) : "—"}</td><td><span class="status ${FORM_STATE[f.state][0]}">${esc(FORM_STATE[f.state][1])}</span></td><td class="t-sm">${f.published_at ? `${esc(istDay(f.published_at))} ${esc(istTime(f.published_at))}<small style="display:block;color:var(--muted)">${esc(f.published_by || "")}</small>` : "—"}</td></tr>`).join("");
-  const calls = v.calls.map(k => `<tr><td>${esc(istDay(k.requested_at))} ${esc(istTime(k.requested_at))}${k.scheduled_for ? `<small style="display:block;color:var(--muted)">for ${esc(istDay(k.scheduled_for))} ${esc(istTime(k.scheduled_for))}</small>` : ""}</td>
-    <td><button class="" style="background:none;border:0;padding:0;cursor:pointer;color:inherit;text-align:left" data-case="${esc(k.case_id)}"><strong>${esc(k.person)}</strong></button><small style="display:block;color:var(--muted)">${esc(k.case_id)}</small></td>
-    <td>${callPill(k.status)}</td><td>${esc(mmss(k.duration_seconds))}</td>
-    <td class="t-sm">${k.asked?.length ? esc(k.asked.join(", ").replace(/_/g, " ")) : "everything"}${k.reason ? `<small style="display:block;color:var(--muted)">${esc(k.reason)}</small>` : ""}</td>
-    <td class="t-sm">${k.audio_url ? `<audio controls preload="none" src="${esc(recordingSrc(k.audio_url))}" style="max-width:200px"></audio>` : k.has_audio ? `<small style="color:var(--muted)">Recording kept. Reviewers can play it.</small>` : `<small style="color:var(--muted)">No recording</small>`}${k.transcript ? `<details><summary style="cursor:pointer">Transcript</summary><pre class="mono t-xs" style="white-space:pre-wrap;margin:6px 0 0">${esc(k.transcript)}</pre></details>` : k.has_transcript ? `<small style="display:block;color:var(--muted)">Transcript kept. Reviewers can read it.</small>` : ""}</td></tr>`).join("");
-  return `${pageHead("Phone calls", "How the voice agent reaches people.", "The platform asks for a call, a person approves it, and ZoLabs places it. Here is the connection, the form each mission uses, and every call made.")}
-    <div class="agent-layout">
-      <section class="card config-section"><div class="card-head"><div><h2>Connection</h2><p>What is switched on</p></div><span class="status ${v.kind === "zolabs" ? "confirmed" : v.kind === "simulated" ? "progress" : "not-started"}">${esc(kind)}</span></div>
-        <div class="config-list">
-          ${configRow("Calls", v.calls_enabled ? "Switched on" : "Switched off", v.calls_enabled ? "Approved calls are placed by the scheduler." : "Nothing will ring, even when a call is approved.")}
-          ${configRow("Who can be called", v.who_can_be_called, "Only people who have not opted out, inside the contact hours.")}
-          ${configRow("Finished calls", v.callback_ready ? "ZoLabs rings us back" : "Found by the scheduler", v.callback_ready ? "ZoLabs tells us the moment a call finishes, and we fetch the details ourselves." : "No callback address is set, so results are picked up when the scheduler runs.")}
-        </div>
-        ${checkNote}
-        ${v.can_check && v.kind !== "off" ? `<button class="button ghost small" data-action="voice-check">Check connection</button><small class="muted t-xs" style="display:block;margin-top:6px">Asks ZoLabs who we are signed in as. Places no call and costs nothing.</small>` : ""}</section>
-      <aside class="card config-section"><div class="card-head"><div><h2>Phone forms</h2><p>One per mission</p></div></div>
-        <div style="overflow-x:auto"><table class="data-table"><thead><tr><th>Mission</th><th>Form</th><th>State</th><th>Published</th></tr></thead><tbody>${forms}</tbody></table></div>
-        <div style="margin-top:10px"><button class="button ghost small" data-go="missions">Open a mission to preview or publish</button></div></aside></div>
-    <section class="card card-pad" style="margin-top:15px"><div class="card-head"><div><h2>Calls</h2><p>Most recent first. Recordings and transcripts are shown to reviewers and platform staff only.</p></div><span class="status active">${v.calls.length}</span></div>
-      ${v.calls.length ? `<div style="overflow-x:auto"><table class="data-table"><thead><tr><th>Requested</th><th>Person</th><th>Result</th><th>Length</th><th>What it asked</th><th>Recording</th></tr></thead><tbody>${calls}</tbody></table></div>` : empty("No calls yet", "When the agent asks for a call and a person approves it, it appears here.")}</section>`;
+  const account = chk?.ok ? (typeof chk.account === "string" ? chk.account : chk.account?.email || chk.account?.name || chk.account?.account || JSON.stringify(chk.account).slice(0, 120)) : "";
+  const checkNote = chk ? (chk.ok ? `<p class="pc-note ok">Connected. Signed in as ${esc(account)}.</p>` : `<p class="pc-note bad">Could not connect: ${esc(chk.error)}</p>`) : "";
+  const canCheck = v.can_check && v.kind !== "off";
+
+  // 1. Status strip: is it working, and who can it reach?
+  const tile = (label, value, note, tone, extra = "") => `<div class="pc-tile"><span class="pc-label">${label}</span><strong class="pc-value">${tone ? `<i class="pc-dot ${tone}"></i>` : ""}${esc(value)}</strong><small>${esc(note)}</small>${extra}</div>`;
+  const strip = `<section class="pc-strip" aria-label="Phone connection">
+    ${tile("Connection", kindLabel, canCheck ? "Asks ZoLabs who we are signed in as. Places no call and costs nothing." : "", kindTone, canCheck ? `<button type="button" class="button ghost small" data-action="voice-check">Check connection</button>` : "")}
+    ${tile("Calls", v.calls_enabled ? "Switched on" : "Switched off", v.calls_enabled ? "Approved calls are placed by the scheduler." : "Nothing will ring, even when a call is approved.", v.calls_enabled ? "ok" : "off")}
+    ${tile("Who can be called", v.who_can_be_called, "Only people who have not opted out, inside the contact hours.", "")}
+    ${tile("Finished calls", v.callback_ready ? "ZoLabs rings us back" : "Found by the scheduler", v.callback_ready ? "ZoLabs tells us the moment a call finishes, and we fetch the details ourselves." : "No callback address is set, so results are picked up when the scheduler runs.", "")}
+  </section>`;
+
+  // 2. The calls, most recent first. One row each; the recording and transcript sit underneath.
+  const count = (statuses, cls, label) => { const n = v.calls.filter(k => statuses.includes(k.status)).length; return n ? `<span class="status ${cls}">${n} ${label}</span>` : ""; };
+  const counts = [count(["scheduled"], "progress", "scheduled"), count(["in_progress"], "progress", "in progress"), count(["completed"], "confirmed", "completed"), count(["no_answer", "busy", "declined"], "review", "not answered"), count(["failed"], "not-confirmed", "failed")].join("");
+  const callRow = k => {
+    const asked = k.asked?.length ? k.asked.join(", ").replace(/_/g, " ") : "everything";
+    const recording = k.audio_url ? `<audio class="pc-audio" controls preload="none" src="${esc(recordingSrc(k.audio_url))}"></audio>` : k.has_audio ? `<small>Recording kept. Reviewers can play it.</small>` : k.status === "completed" ? `<small>No recording</small>` : "";
+    const transcript = k.transcript ? `<details class="pc-transcript"><summary>Transcript</summary><pre class="mono t-xs">${esc(k.transcript)}</pre></details>` : k.has_transcript ? `<small>Transcript kept. Reviewers can read it.</small>` : "";
+    return `<article class="pc-call">
+      <div class="pc-who">${callPill(k.status)}<button type="button" class="pc-person" data-case="${esc(k.case_id)}">${esc(k.person)}</button><small>${esc(k.case_id)}</small></div>
+      <div class="pc-what"><span class="pc-k">Asked for</span><span>${esc(asked)}</span>${k.reason ? `<small>${esc(k.reason)}</small>` : ""}</div>
+      <div class="pc-when"><span class="pc-k">Requested</span><span>${esc(istDay(k.requested_at))} ${esc(istTime(k.requested_at))}</span>${k.scheduled_for ? `<small>for ${esc(istDay(k.scheduled_for))} ${esc(istTime(k.scheduled_for))}</small>` : ""}${k.duration_seconds != null ? `<small>Length ${esc(mmss(k.duration_seconds))}</small>` : ""}</div>
+      <div class="pc-media">${recording}${transcript}</div>
+    </article>`;
+  };
+
+  // 3. The phone form of each mission: published once per mission, and again when the mission changes.
+  const formRow = f => `<div class="pc-form">
+      <div class="pc-form-name"><strong>${esc(f.name)}</strong><small>${esc(f.mission_version)}</small></div>
+      <span class="status ${FORM_STATE[f.state][0]}">${esc(FORM_STATE[f.state][1])}</span>
+      <div class="pc-form-meta">${f.published_at ? `Published ${esc(istDay(f.published_at))} ${esc(istTime(f.published_at))}${f.published_by ? ` by ${esc(f.published_by)}` : ""}` : "Not published yet"}${f.form_id ? `<small>Form ${esc(f.form_id)}</small>` : ""}</div>
+      <button type="button" class="button ghost small" data-open-mission="${esc(f.mission_version)}">Preview or publish</button>
+    </div>`;
+
+  return `${pageHead("Phone calls", "How the voice agent reaches people.", "The platform asks for a call, a person approves it, and ZoLabs places it. Here is the connection, every call made, and the form each mission uses.")}
+    ${strip}${checkNote}
+    <section class="card card-pad pc-section"><div class="card-head"><div><h2>Calls</h2><p>Most recent first. Recordings and transcripts are shown to reviewers and platform staff only.</p></div><span class="status active">${v.calls.length}</span></div>
+      ${counts ? `<div class="pc-counts">${counts}</div>` : ""}
+      ${v.calls.length ? `<div class="pc-list">${v.calls.map(callRow).join("")}</div>` : empty("No calls yet", "When the agent asks for a call and a person approves it, it appears here.")}</section>
+    <section class="card card-pad pc-section"><div class="card-head"><div><h2>Phone forms</h2><p>One per mission. The form the voice agent follows on a call.</p></div></div>
+      ${v.forms.length ? `<div class="pc-forms">${v.forms.map(formRow).join("")}</div>` : empty("No missions yet", "Each mission gets its own phone form.")}</section>`;
 }
 // While a call is in progress, ask the server every few seconds whether it has finished, and show the result when it has.
 let callSyncBusy = false, lastSyncError = "";
@@ -789,35 +883,102 @@ function openStudioModal() {
     for (const k of ["max_attempts", "window_start_hour", "window_end_hour"]) if (String(b[k]).trim() !== "") out[k] = Number(b[k]);
     return out;
   };
-  const field = (id, label, hint, rows, value) => `<div class="field full"><label for="${id}">${label}</label><textarea id="${id}" rows="${rows}" class="t-md">${esc(value)}</textarea><small>${hint}</small></div>`;
+  // ---- the form screen -------------------------------------------------------------------------------------------------------------
+  const STUDIO_STEPS = ["Describe", "Draft", "Read", "Save"];
+  const LIMITS = { name: [3, 100], programme_name: [1, 80], goal: [20, 1500], people: [10, 1000], find_out: [10, 3000], approach: [0, 1500] }; // the same limits the server checks
+  const hourLabel = h => (h === 24 ? "12:00 am (end of day)" : `${Math.floor(h) % 12 || 12}:${h % 1 ? "30" : "00"} ${h < 12 ? "am" : "pm"}`);
+  const hourSelect = (id, value, label) => `<select id="${id}" aria-label="${label}"><option value="">Usual</option>${Array.from({ length: 49 }, (_, i) => i / 2).map(h => `<option value="${h}" ${String(h) === String(value) ? "selected" : ""}>${hourLabel(h)}</option>`).join("")}</select>`;
+  const autosize = el => { if (!el.offsetParent) return; el.style.height = "auto"; el.style.height = `${Math.min(el.scrollHeight + 2, 260)}px`; }; // not while the dialog is hidden: it would measure as zero // grows as you type, so there are no big empty boxes
+
+  /** Plain-words problems with the brief, found before anything is sent. The server checks the same limits again. */
+  const briefProblems = b => {
+    const out = [], len = k => String(b[k] ?? "").trim().length;
+    if (len("name") < 3 || len("name") > 100) out.push("Give the mission a name (3 to 100 characters).");
+    if (len("programme_name") < 1 || len("programme_name") > 80) out.push("Say what the programme is called (up to 80 characters).");
+    if (len("goal") < 20) out.push("Say what the mission is trying to achieve, in at least 20 characters.");
+    if (len("people") < 10) out.push("Say who the people are, in at least 10 characters.");
+    if (len("find_out") < 10) out.push("Say what you need to find out about each person, in at least 10 characters.");
+    for (const k of ["goal", "people", "find_out", "approach"]) if (len(k) > LIMITS[k][1]) out.push(`That text is too long: keep it under ${LIMITS[k][1]} characters.`);
+    const att = String(b.max_attempts).trim();
+    if (att !== "" && !(Number.isInteger(Number(att)) && Number(att) >= 1 && Number(att) <= 10)) out.push("Most contact attempts has to be a whole number from 1 to 10.");
+    const ws = String(b.window_start_hour), we = String(b.window_end_hour);
+    if (ws !== "" && we !== "" && Number(ws) >= Number(we)) out.push("Contact hours must end after they start.");
+    return [...new Set(out)];
+  };
+
+  /** One line that says what the optional settings are, so they can stay folded away. */
+  const settingsSummary = () => {
+    const b = s.brief, picked = state.missions.find(m => m.version === b.start_from);
+    const ws = String(b.window_start_hour), we = String(b.window_end_hour), att = String(b.max_attempts).trim();
+    const hours = ws === "" && we === "" ? "usual contact hours" : `contact ${ws === "" ? "from the usual start" : "from " + hourLabel(Number(ws))} ${we === "" ? "to the usual end" : "to " + hourLabel(Number(we))}`;
+    return `${picked ? "Using " + picked.name : "Using the standard setup"} · ${att ? att + " attempts at most" : "usual attempts"} · ${hours}`;
+  };
+
+  const field = (id, label, hint, rows, value, key) => {
+    const [min, max] = LIMITS[key];
+    return `<div class="field full"><div class="field-label"><label for="${id}">${label}</label><span class="field-count" id="${id}Count" data-min="${min}" data-max="${max}"></span></div><small class="field-hint">${hint}</small><textarea id="${id}" rows="${rows}" class="t-md">${esc(value)}</textarea></div>`;
+  };
+
+  const countLine = (id, value) => {
+    const el = $(id + "Count"); if (!el) return;
+    const n = value.trim().length, min = Number(el.dataset.min), max = Number(el.dataset.max);
+    el.textContent = `${n} / ${max}`;
+    el.classList.toggle("is-short", n > 0 && n < min);       // typed something, but not enough yet
+    el.classList.toggle("is-long", n > max);
+  };
+
   const drawBrief = () => {
-    const b = s.brief;
-    modal.innerHTML = `<div class="modal-head"><div><h2 id="modalTitle">Create a mission</h2><p>Describe the mission in your own words. The drafter turns it into the questions and checklist the employee works from. You read and approve it before anyone is contacted. Do not write any person's name or phone number here.</p></div><button class="close-button" id="closeModal" aria-label="Close">×</button></div>
-      <div class="modal-body"><div class="form-grid">
-        <div class="field"><label for="sName">Mission name</label><input id="sName" value="${esc(b.name)}" placeholder="Six-month placement check" /></div>
-        <div class="field"><label for="sProg">Programme name (as participants see it)</label><input id="sProg" value="${esc(b.programme_name)}" placeholder="Project Udaan" /></div>
-        ${field("sGoal", "What is this mission trying to achieve?", "For example: find out whether people we placed in jobs are still working there six months on, and whether they want support.", 3, b.goal)}
-        ${field("sPeople", "Who are the people?", "For example: young people who finished a three-month retail training with us last year, mostly on basic phones.", 2, b.people)}
-        ${field("sFind", "What must we find out about each person?", "One thing per line is clearest. Say when something only applies to some people, for example: &quot;the name of their employer, if they are working&quot;.", 6, b.find_out)}
-        ${field("sApproach", "Tone, things to avoid, languages (optional)", "For example: be warm and brief; never promise jobs; do not ask about family.", 2, b.approach)}
-        <div class="field full"><label for="sFrom">Use the approved first message, contact rules and employee from</label><select id="sFrom">${state.missions.map(m => `<option value="${esc(m.version)}" ${m.version === b.start_from ? "selected" : ""}>${esc(m.name)} · ${esc(m.version)}</option>`).join("")}</select><small>The first WhatsApp message must be a template approved by WhatsApp, so it is copied rather than drafted.</small></div>
-        <div class="field"><label for="sAtt">Most contact attempts per person (optional)</label><input id="sAtt" type="number" min="1" max="10" value="${esc(b.max_attempts)}" /></div>
-        <div class="field"><label for="sWin">Contact hours, from and to (optional)</label><div style="display:flex;gap:8px"><input id="sWs" type="number" min="0" max="24" placeholder="9" value="${esc(b.window_start_hour)}" /><input id="sWe" type="number" min="0" max="24" placeholder="18" value="${esc(b.window_end_hour)}" /></div></div>
-        ${s.error ? `<p class="danger-text t-sm" style="grid-column:1/-1;margin:0;white-space:pre-wrap">${esc(s.error)}</p>` : ""}
-      </div></div>
-      <div class="modal-foot"><button class="button ghost" id="cancelS">Cancel</button><button class="button primary" id="draftS" ${s.running ? "disabled" : ""}>${s.running ? "Drafting… this can take a minute" : "Draft the mission"}</button></div>`;
+    const b = s.brief, open = !!s.settingsOpen;
+    modal.classList.add("modal-sticky");                      // only the middle scrolls, so Cancel and Draft are always in view
+    modal.innerHTML = `<div class="modal-head"><div><h2 id="modalTitle">Create a mission</h2><p>Describe the mission in your own words. The drafter turns it into the questions and checklist the employee works from.</p></div><button class="close-button" id="closeModal" aria-label="Close">×</button></div>
+      ${s.running ? '<div class="studio-progress" role="progressbar" aria-label="Drafting the mission"></div>' : ""}
+      <div class="stepper" aria-label="Steps">${STUDIO_STEPS.map((n, i) => `<div class="stepper-item ${i === 0 ? "active" : ""}" ${i === 0 ? 'aria-current="step"' : ""}><span class="stepper-number">${i + 1}</span><span>${n}</span></div>`).join("")}</div>
+      <div class="modal-body">
+        <div class="studio-note"><span class="studio-note-icon" aria-hidden="true">i</span><p><strong>Describe the programme, not people.</strong> Do not write any person's name or phone number here. You read and approve the draft before anyone is contacted.</p></div>
+        ${s.problems?.length ? `<div class="studio-problems" role="alert"><strong>${s.problems.length === 1 ? "One thing to fix" : "A few things to fix"}</strong><ul>${s.problems.map(p => `<li>${esc(p)}</li>`).join("")}</ul></div>` : ""}
+        ${s.error ? `<div class="studio-problems" role="alert"><strong>The draft could not be started</strong><p>${esc(s.error)}</p></div>` : ""}
+        <fieldset class="studio-fields" ${s.running ? "disabled" : ""}>
+          <section class="form-section"><h3>About the mission</h3><div class="form-grid">
+            <div class="field"><label for="sName">Mission name</label><input id="sName" value="${esc(b.name)}" placeholder="Six-month placement check" /></div>
+            <div class="field"><label for="sProg">Programme name <span class="opt">(as participants see it)</span></label><input id="sProg" value="${esc(b.programme_name)}" placeholder="Project Udaan" /></div>
+          </div></section>
+          <section class="form-section"><h3>What it is for</h3><div class="form-grid">
+            ${field("sGoal", "What is this mission trying to achieve?", "For example: find out whether people we placed in jobs are still working there six months on, and whether they want support.", 3, b.goal, "goal")}
+            ${field("sPeople", "Who are the people?", "For example: young people who finished a three-month retail training with us last year, mostly on basic phones.", 2, b.people, "people")}
+            ${field("sFind", "What must we find out about each person?", "One thing per line is clearest. Say when something only applies to some people, for example: &quot;the name of their employer, if they are working&quot;.", 5, b.find_out, "find_out")}
+          </div></section>
+          <section class="form-section"><h3>Tone and style <span class="opt">(optional)</span></h3><div class="form-grid">
+            ${field("sApproach", "Tone, things to avoid, languages", "For example: be warm and brief; never promise jobs; do not ask about family.", 2, b.approach, "approach")}
+          </div></section>
+          <section class="form-section"><button type="button" class="settings-toggle" id="sToggle" aria-expanded="${open}"><span><strong>Settings</strong> <span class="opt">(optional)</span><small id="sSummary">${esc(settingsSummary())}</small></span><svg class="settings-chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            ${open ? `<div class="form-grid settings-panel">
+              <div class="field full"><label for="sFrom">Use the approved first message, contact rules and employee from</label><select id="sFrom">${state.missions.map(m => `<option value="${esc(m.version)}" ${m.version === b.start_from ? "selected" : ""}>${esc(m.name)} · ${esc(m.version)}</option>`).join("")}</select><small>The first WhatsApp message must be a template approved by WhatsApp, so it is copied rather than drafted.</small></div>
+              <div class="field"><label for="sAtt">Most contact attempts per person</label><input id="sAtt" type="number" min="1" max="10" placeholder="Usual" value="${esc(b.max_attempts)}" /></div>
+              <div class="field"><label for="sWs">Contact hours</label><div class="hours-row">${hourSelect("sWs", b.window_start_hour, "Contact hours, from")}<span>to</span>${hourSelect("sWe", b.window_end_hour, "Contact hours, until")}</div></div>
+            </div>` : ""}</section>
+        </fieldset>
+      </div>
+      <div class="modal-foot"><button class="button ghost" id="cancelS">Cancel</button><span class="foot-actions"><small class="foot-note">${s.running ? "Drafting can take a minute. Keep this window open." : "Takes about a minute. Nothing is saved until you approve it."}</small><button class="button primary" id="draftS" ${s.running ? "disabled" : ""}>${s.running ? "Drafting…" : "Draft the mission"}</button></span></div>`;
     $("closeModal").addEventListener("click", closeModal); $("cancelS").addEventListener("click", closeModal);
-    const bind = (id, key) => $(id).addEventListener("input", e => { s.brief[key] = e.target.value; });
-    [["sName", "name"], ["sProg", "programme_name"], ["sGoal", "goal"], ["sPeople", "people"], ["sFind", "find_out"], ["sApproach", "approach"], ["sAtt", "max_attempts"], ["sWs", "window_start_hour"], ["sWe", "window_end_hour"]].forEach(([id, k]) => bind(id, k));
-    $("sFrom").addEventListener("change", e => { s.brief.start_from = e.target.value; });
+    const counted = { sGoal: "goal", sPeople: "people", sFind: "find_out", sApproach: "approach" };
+    modal.querySelectorAll("textarea").forEach(autosize);
+    for (const [id, k] of Object.entries(counted)) countLine(id, b[k]);
+    const bind = (id, key) => $(id)?.addEventListener("input", e => { s.brief[key] = e.target.value; if (e.target.tagName === "TEXTAREA") autosize(e.target); if (counted[id]) countLine(id, e.target.value); if (id === "sAtt") $("sSummary").textContent = settingsSummary(); });
+    [["sName", "name"], ["sProg", "programme_name"], ["sGoal", "goal"], ["sPeople", "people"], ["sFind", "find_out"], ["sApproach", "approach"], ["sAtt", "max_attempts"]].forEach(([id, k]) => bind(id, k));
+    $("sFrom")?.addEventListener("change", e => { s.brief.start_from = e.target.value; $("sSummary").textContent = settingsSummary(); });
+    [["sWs", "window_start_hour"], ["sWe", "window_end_hour"]].forEach(([id, k]) => $(id)?.addEventListener("change", e => { s.brief[k] = e.target.value; $("sSummary").textContent = settingsSummary(); }));
+    $("sToggle").addEventListener("click", () => { s.settingsOpen = !s.settingsOpen; drawBrief(); });
     $("draftS").addEventListener("click", async () => {
       if (s.running) return;
-      s.running = true; s.error = null; drawBrief(); // lock the button at once: drafting takes a while and a second click would start a second draft
+      s.problems = briefProblems(s.brief); s.error = null;
+      if (s.problems.length) { drawBrief(); modal.querySelector(".modal-body").scrollTop = 0; return; } // say what is missing before sending anything
+      s.running = true; drawBrief(); // lock the button at once: drafting takes a while and a second click would start a second draft
       try { s.result = await api("/missions/draft", { method: "POST", body: read() }); s.step = "review"; s.running = false; drawReview(); }
       catch (e) { s.running = false; s.error = e.message; drawBrief(); }
     });
   };
   const drawReview = () => {
+    modal.classList.remove("modal-sticky");
     const r = s.result, d = r.definition;
     const need = d ? d.evidence_requirements.map(x => `<div class="check-item"><span class="check-mark">${x.required === false ? "○" : "●"}</span><span><strong>${esc(x.label)}</strong><small>${x.required === false ? "Optional" : "Required"}${x.when ? `, only if <code>${esc(x.when.key)}</code> is ${esc(x.when.in.join(" or "))}` : ""}${x.verify_against ? ", checked against the programme record" : ""}.${x.hint ? " " + esc(x.hint) : ""}</small></span></div>`).join("") : "";
     modal.innerHTML = `<div class="modal-head"><div><h2 id="modalTitle">${d ? "Read the draft" : "The draft could not be made"}</h2><p>${d ? `Drafted ${r.source === "claude" ? "by Claude" : "as a plain starting point (no model key is set)"}${r.attempts > 1 ? ` after ${r.attempts} attempts` : ""}. Nothing is saved yet. It will be saved as draft wording: nobody is contacted until a person signs it off.` : "Fix the brief or add detail, then try again."}</p></div><button class="close-button" id="closeModal" aria-label="Close">×</button></div>
@@ -845,6 +1006,7 @@ function openStudioModal() {
     });
   };
   drawBrief(); modalBackdrop.hidden = false;
+  modal.querySelectorAll("textarea").forEach(autosize); // now that it is visible, give the boxes their height
 }
 
 // The evidence a mission needs: the checklist the employee works through for every person.
@@ -962,7 +1124,7 @@ function openImportModal() {
   const draw = () => {
     modal.innerHTML = `<div class="modal-head"><div><h2 id="modalTitle">Add participants</h2><p>One row per participant. Numbers are encrypted when stored.</p></div><button class="close-button" id="closeModal" aria-label="Close">×</button></div>
       <div class="modal-body">${s.result ? importResult(s.result) : `
-        ${state.missions.length > 1 ? `<div class="field full" style="margin-bottom:10px"><label for="impMission">Mission</label><select id="impMission">${state.missions.map(m => `<option value="${esc(m.version)}" ${m.version === s.mission ? "selected" : ""}>${esc(m.name)} · ${esc(m.version)}</option>`).join("")}</select><small>Decides the first message, questions and contact hours for these participants. It cannot be changed afterwards.</small></div>` : ""}
+        <div class="field full" style="margin-bottom:10px"><label for="impMission">Mission</label><select id="impMission">${state.missions.map(m => `<option value="${esc(m.version)}" ${m.version === s.mission ? "selected" : ""}>${esc(m.name)} · ${esc(m.version)}</option>`).join("")}</select><small>Decides the first message, questions and contact hours for these participants. It cannot be changed afterwards.${state.missions.length > 1 ? "" : " Only one mission exists at the moment."}</small></div>
         <div class="field full"><label for="csvFile">CSV file</label><input type="file" id="csvFile" accept=".csv,.txt,text/csv" /></div>
         <div class="field full" style="margin-top:10px"><label for="csvText">Or paste rows (first row is the header) <button type="button" class="text-button" id="csvExample" style="margin-left:8px">Insert an example</button></label><textarea id="csvText" rows="6" placeholder="name,phone,employer,location,cohort,language&#10;Asha Kumari,9876543210,Acme Retail,Jaipur,Batch 7,en">${esc(s.text)}</textarea><small>name and phone are required. employer, location, cohort and language (en or hi) are optional. Larger files are sent in batches of 20.</small></div>
         ${s.problem ? `<p class="danger-text t-sm" style="margin:10px 0 0">${esc(s.problem)}</p>` : ""}
@@ -1026,13 +1188,18 @@ function openPurgeModal() {
   });
 }
 
-function closeModal() { modalBackdrop.hidden = true; modal.innerHTML = ""; /* pasted rows and names must not linger in the page */ }
+function closeModal() { modalBackdrop.hidden = true; modal.classList.remove("modal-sticky"); modal.innerHTML = ""; /* pasted rows and names must not linger in the page */ }
 
 // ---- events -------------------------------------------------------------------------------------------------------------------------------------------
 function go(view) { state.view = view; chrome(); window.scrollTo({ top: 0 }); }
 
+function bindGo(root) { root.querySelectorAll("[data-go]").forEach(el => el.addEventListener("click", () => go(el.dataset.go))); }
+
 function bind() {
-  appView.querySelectorAll("[data-go]").forEach(el => el.addEventListener("click", () => go(el.dataset.go)));
+  bindGo(appView);
+  $("dashMission")?.addEventListener("change", e => { state.dashMission = e.target.value; refreshOverview(); });
+  appView.querySelectorAll("[data-dash-clear]").forEach(el => el.addEventListener("click", () => { const s = $("dashMission"); s.value = ALL; s.dispatchEvent(new Event("change", { bubbles: true })); }));
+  appView.querySelectorAll("[data-open-mission]").forEach(el => el.addEventListener("click", async () => { try { state.missionShown = await api(`/mission?version=${encodeURIComponent(el.dataset.openMission)}`); go("missions"); } catch (err) { toast(err.message, "warning"); } }));
   appView.querySelectorAll("[data-case]").forEach(el => el.addEventListener("click", e => { e.stopPropagation(); openCase(el.dataset.case); }));
   appView.querySelectorAll("[data-review]").forEach(el => el.addEventListener("click", () => { state.reviewSelected = el.dataset.review; render(); }));
   appView.querySelectorAll("[data-decision]").forEach(el => el.addEventListener("click", () => decide(el.dataset.id, el.dataset.decision)));

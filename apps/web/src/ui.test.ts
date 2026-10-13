@@ -59,6 +59,9 @@ describe("the live app", () => {
 
   it("explains a wrong file instead of silently disabling the button", async () => {
     click(q('[data-action="import"]'));
+    // the mission is always shown, even when there is only one, so it is clear which mission people will join
+    expect((document.getElementById("impMission") as HTMLSelectElement).value).toBe("MSN-001-v1.3");
+    expect(document.getElementById("modal")!.textContent).toContain("Only one mission exists at the moment.");
     const ta = document.getElementById("csvText") as HTMLTextAreaElement;
     ta.value = "handle,title,body,vendor\ngolden-globe,Golden Globe,Fancy pack,Shammah";
     ta.dispatchEvent(new Event("input", { bubbles: true }));
@@ -142,6 +145,66 @@ describe("the live app", () => {
     expect(conv).toContain("I work at the same place as before"); // the participant's answer, shown as its label
   });
 
+  it("the case panel has a header, a summary, a next step and four tabs with counts, and keeps you on your tab", async () => {
+    click(document.getElementById("closeDrawer"));
+    click(q('.nav-item[data-view="cases"]'));
+    await wait(() => text().includes("Meena Test"), "the case list");
+    click([...document.querySelectorAll("tr[data-case]")].find(r => r.textContent!.includes("Meena Test")) as Element);
+    await wait(() => !!document.getElementById("runAgent"), "the case panel");
+    const drawer = document.getElementById("caseDrawer")!;
+    const tab = (k: string) => drawer.querySelector(`[data-tab="${k}"]`) as HTMLElement;
+    const panel = (k: string) => drawer.querySelector(`[data-panel="${k}"]`) as HTMLElement;
+
+    // the top: who, where the case stands, what is next. The tabs come after it.
+    expect(drawer.querySelector(".drawer-avatar")!.textContent).toBe("MT");
+    expect(drawer.querySelector(".drawer-head .status")).not.toBeNull();
+    expect(drawer.querySelector(".next-action")!.compareDocumentPosition(drawer.querySelector(".drawer-tabs")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(drawer.querySelector(".next-action .sim-row #scenarioSelect")).not.toBeNull();    // the simulated reply sits with the buttons it belongs to
+    expect(drawer.querySelector(".next-buttons #runAgent")).not.toBeNull();
+
+    // four tabs, overview first. The others are on the page but hidden, so they keep loading.
+    expect([...drawer.querySelectorAll(".drawer-tab")].map(b => b.getAttribute("data-tab"))).toEqual(["overview", "conversation", "calls", "activity"]);
+    expect(tab("overview").getAttribute("aria-selected")).toBe("true");
+    expect(panel("overview").hidden).toBe(false);
+    for (const k of ["conversation", "calls", "activity"]) expect(panel(k).hidden).toBe(true);
+    expect(panel("overview").textContent).toContain("What we need to know");
+    expect(panel("overview").textContent).toContain("•••• 0099");                            // the participant's details are a plain list
+    expect(panel("overview").querySelectorAll(".kv-row")).toHaveLength(5);
+    expect(panel("overview").querySelector("#deleteCase")).not.toBeNull();                     // administrators only
+    expect(panel("conversation").querySelector("#convBox")).not.toBeNull();
+    expect(panel("activity").querySelector("#caseHistory")).not.toBeNull();
+
+    // counts appear once the data has loaded, and only when there is something to count
+    await wait(() => !tab("conversation").querySelector<HTMLElement>(".tab-count")!.hidden && !tab("activity").querySelector<HTMLElement>(".tab-count")!.hidden, "the counts");
+    expect(Number(tab("conversation").querySelector(".tab-count")!.textContent)).toBeGreaterThan(0);
+    expect(tab("calls").querySelector<HTMLElement>(".tab-count")!.hidden).toBe(true);        // no calls yet, so no number
+
+    // clicking and the keyboard
+    click(tab("conversation"));
+    expect(panel("conversation").hidden).toBe(false);
+    expect(panel("overview").hidden).toBe(true);
+    expect(tab("conversation").getAttribute("aria-selected")).toBe("true");
+    const key = (k: string) => tab("conversation").dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
+    key("ArrowRight"); expect(tab("calls").getAttribute("aria-selected")).toBe("true");
+    key("ArrowRight"); key("ArrowRight");                                                    // activity, then round to overview
+    expect(tab("overview").getAttribute("aria-selected")).toBe("true");
+    key("End"); expect(tab("activity").getAttribute("aria-selected")).toBe("true");
+    key("Home"); expect(tab("overview").getAttribute("aria-selected")).toBe("true");
+    expect([...drawer.querySelectorAll(".drawer-tab")].filter(b => (b as HTMLElement).tabIndex === 0)).toHaveLength(1);   // one tab stop
+
+    // an action that refreshes the panel keeps you where you were
+    click(tab("conversation"));
+    (document.getElementById("simText") as HTMLInputElement).value = "lol what";
+    click(document.getElementById("simSend"));
+    await wait(() => document.getElementById("convBox")!.textContent!.includes("could not understand"), "the reply to be handled", 6000);
+    expect(tab("conversation").getAttribute("aria-selected")).toBe("true");
+    expect(panel("conversation").hidden).toBe(false);
+    expect(panel("overview").hidden).toBe(true);
+
+    click(document.getElementById("closeDrawer"));
+    await wait(() => !document.getElementById("caseDrawer")!.classList.contains("open"), "the panel to close");
+  });
+
   it("the audit search filters, and nothing is a fake control", async () => {
     click(q('.nav-item[data-view="audit"]'));
     await wait(() => !!document.getElementById("auditSearch"), "audit page");
@@ -182,6 +245,7 @@ describe("the live app", () => {
     click(q('[data-action="import"]'));
     expect(document.getElementById("impMission")).not.toBeNull();
     expect((document.getElementById("impMission") as HTMLSelectElement).value).toBe("MSN-002-v1");
+    expect(document.getElementById("modal")!.textContent).not.toContain("Only one mission exists"); // with several missions the extra sentence goes
     click(document.getElementById("cancelImport"));
   });
 
@@ -216,6 +280,90 @@ describe("the live app", () => {
     await wait(() => text().includes("Kiran Test"), "cases list");
     expect(state_status("Kiran Test")).toContain("In progress");
     expect(state_status("Mohan Test")).toContain("Not started"); // not in the campaign
+  });
+
+  it("filters the Command centre by mission: the numbers follow, and they match the server's own", async () => {
+    const admin = { "x-dozai-role": "admin" };
+    const { summarize } = await import("./dashboard.js");
+    const serverCases = async () => (await (await fetch(base + "/api/cases", { headers: admin })).json()).cases as Record<string, any>[]; // eslint-disable-line @typescript-eslint/no-explicit-any
+    const kpi = (k: string) => document.querySelector(`[data-kpi="${k}"]`)?.textContent;
+    const stageCount = (k: string) => document.querySelector(`[data-stage="${k}"] [data-stage-count]`)?.textContent;
+    const pickMission = (v: string) => { const s = document.getElementById("dashMission") as HTMLSelectElement; s.value = v; s.dispatchEvent(new Event("change", { bubbles: true })); };
+    const expectPage = async (want: ReturnType<typeof summarize>, what: string) => {
+      await wait(() => kpi("total") === String(want.total) && kpi("reached") === `${Math.round((want.reached / want.total) * 100)}%` && kpi("confirmed") === String(want.confirmed) && kpi("review") === String(want.review), `${what}: the four numbers`);
+      await wait(() => stageCount("reached") === String(want.reached) && stageCount("responded") === String(want.responded) && stageCount("complete") === String(want.complete), `${what}: the progress counts`);
+      await wait(() => document.querySelector("[data-donut-centre]")?.textContent === String(Object.values(want.mix).reduce((a, b) => a + b, 0)), `${what}: the outcomes`);
+    };
+
+    click(q('.nav-item[data-view="overview"]'));
+    await wait(() => !!document.getElementById("dashMission"), "the mission filter");
+    const options = [...(document.getElementById("dashMission") as HTMLSelectElement).options].map(o => o.value);
+    expect(options[0]).toBe("all");
+    expect(options).toEqual(expect.arrayContaining(["MSN-001-v1.3", "MSN-002-v1"]));
+
+    // The counting rules, run over the cases the page loaded, give exactly what the server's own summary says.
+    const cases = await serverCases();
+    const server = await (await fetch(base + "/api/summary", { headers: admin })).json();
+    expect(summarize(cases)).toEqual(server);
+    await expectPage(server, "all missions");
+
+    // The filter is its own bar under the greeting, above the numbers. The header keeps only the main action.
+    const bar = () => document.querySelector(".dash-bar")!;
+    expect(document.querySelector(".page-actions #dashMission")).toBeNull();
+    expect(bar().compareDocumentPosition(document.querySelector("[data-overview]")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(document.getElementById("dashCount")!.textContent).toBe(`Showing all ${server.total} participants`);
+    expect(bar().querySelector(".dash-filter")!.classList.contains("is-active")).toBe(false);
+    expect((bar().querySelector("[data-dash-clear]") as HTMLElement).hidden).toBe(true);
+
+    // One mission: every number is that mission's, and the page does not have to be redrawn.
+    const page = document.querySelector("[data-overview]");
+    const mineOf = (v: string) => cases.filter(c => (c.mission_version ?? "MSN-001-v1.3") === v);
+    const second = summarize(mineOf("MSN-002-v1"));
+    expect(second.total).toBeGreaterThan(0);
+    expect(second.total).toBeLessThan(server.total);
+    pickMission("MSN-002-v1");
+    await expectPage(second, "MSN-002-v1");
+    expect(document.querySelector("[data-overview]")).toBe(page);          // updated in place, so it could animate
+    expect(document.getElementById("dashLive")!.textContent).toContain("Second client check-in");
+    expect(bar().querySelector(".dash-filter")!.classList.contains("is-active")).toBe(true);          // the bar shows that the page is filtered
+    expect((bar().querySelector("[data-dash-clear]") as HTMLElement).hidden).toBe(false);
+    expect(document.getElementById("dashCount")!.textContent).toBe(`Showing ${second.total} of ${server.total} participants`);
+    expect(bar().querySelector(".cs-trigger .cs-value")!.textContent).toBe("Second client check-in"); // the name only: no version, no count
+
+    // Recent activity only shows events on that mission's cases.
+    const ids = mineOf("MSN-002-v1").map(c => c.id as string);
+    await wait(() => !document.querySelector('[data-dash="activity"]')!.classList.contains("is-swapping"), "the activity list to settle");
+    const lines = [...document.querySelectorAll('[data-dash="activity"] .event-copy small')].map(e => e.textContent || "");
+    expect(lines.every(l => ids.some(id => l.startsWith(id)))).toBe(true);
+
+    // "Clear" goes back to everyone
+    click(bar().querySelector("[data-dash-clear]"));
+    await expectPage(server, "after Clear");
+    expect((document.getElementById("dashMission") as HTMLSelectElement).value).toBe("all");
+    expect(bar().querySelector(".dash-filter")!.classList.contains("is-active")).toBe(false);
+    expect((bar().querySelector("[data-dash-clear]") as HTMLElement).hidden).toBe(true);
+    expect(document.getElementById("dashCount")!.textContent).toBe(`Showing all ${server.total} participants`);
+    expect(bar().querySelector(".cs-trigger .cs-value")!.textContent).toBe("All missions");
+
+    // The other mission, and back to all.
+    const first = summarize(mineOf("MSN-001-v1.3"));
+    pickMission("MSN-001-v1.3");
+    await expectPage(first, "MSN-001-v1.3");
+    expect(first.total + second.total).toBe(server.total);                 // between them, nobody is lost or counted twice
+    pickMission("all");
+    await expectPage(server, "all missions again");
+
+    // A mission nobody has been added to yet: a friendly empty page, with the filter still there to switch back.
+    const def = (await (await fetch(base + "/api/missions/MSN-002-v1/definition", { headers: admin })).json()).definition;
+    expect((await fetch(base + "/api/missions", { method: "POST", headers: { ...admin, "content-type": "application/json" }, body: JSON.stringify({ ...def, mission_id: "MSN-003", version: "MSN-003-v1", name: "Third client check-in" }) })).status).toBe(201);
+    click(document.getElementById("refresh"));
+    await wait(() => [...((document.getElementById("dashMission") as HTMLSelectElement | null)?.options ?? [])].some(o => o.value === "MSN-003-v1"), "the new mission in the filter");
+    pickMission("MSN-003-v1");
+    await wait(() => text().includes("No participants in this mission yet"), "the empty page");
+    expect(document.getElementById("dashMission")).not.toBeNull();
+    expect((document.getElementById("dashMission") as HTMLSelectElement).value).toBe("MSN-003-v1");
+    pickMission("all");
+    await expectPage(server, "all missions after the empty page");
   });
 
   it("shows the employee, what the agent is told, and lets platform staff add a version", async () => {
@@ -342,6 +490,34 @@ describe("the live app", () => {
     expect(text()).toContain("No reply for two days.");
     click(q("[data-action=\"voice-check\"]"));
     await wait(() => text().includes("Signed in as simulator"), "connection checked");
+
+    // the layout: a status strip first, then the calls as rows, then the forms as rows (no wide tables)
+    expect([...document.querySelectorAll(".pc-tile .pc-label")].map(e => e.textContent)).toEqual(["Connection", "Calls", "Who can be called", "Finished calls"]);
+    const order = [...document.querySelectorAll("#appView .pc-strip, #appView .pc-section h2")].map(e => (e.matches(".pc-strip") ? "strip" : e.textContent));
+    expect(order).toEqual(["strip", "Calls", "Phone forms"]);
+    expect(document.querySelectorAll(".pc-call").length).toBeGreaterThan(0);
+    expect(document.querySelector("#appView table")).toBeNull();
+    expect(q(".pc-call .pc-person")!.textContent).toBe("Nisha Test");
+
+    // a form's button opens that mission on the Mission page
+    click(q("[data-open-mission]"));
+    await wait(() => text().includes("Phone calls (ZoLabs)"), "the Mission page for that form");
+  });
+
+  it("the left panel follows the workflow: home, set up, reach people, follow up, record", () => {
+    const nav = document.getElementById("primaryNav")!;
+    const sections = [...nav.querySelectorAll(".nav-group")].map(g => [g.getAttribute("aria-label"), [...g.querySelectorAll(".nav-item")].map(b => (b as HTMLElement).dataset.view)]);
+    expect((nav.firstElementChild as HTMLElement).dataset.view).toBe("overview");   // Command centre stays on top, with no section label
+    expect(sections).toEqual([
+      ["Set up", ["missions", "agent"]],
+      ["Reach people", ["cases", "campaigns"]],
+      ["Follow up", ["approvals", "calls", "reviews"]],
+      ["Record", ["audit"]],
+    ]);
+    expect(nav.querySelectorAll(".nav-item")).toHaveLength(9);                       // nothing lost
+    for (const id of ["caseCount", "reviewCount", "approvalCount"]) expect(document.getElementById(id)).not.toBeNull(); // the counts are still there
+    expect([...nav.querySelectorAll(".nav-item")].filter(b => b.classList.contains("active"))).toHaveLength(1);
+    expect(nav.querySelector(".nav-group-label")!.getAttribute("aria-hidden")).toBe("true");
   });
 
   it("shows the questionnaire wording and signs it off from the Mission page", async () => {
@@ -379,6 +555,89 @@ describe("the live app", () => {
     expect(m).toContain("Nothing is saved yet");
     click(document.getElementById("saveS"));
     await wait(() => text().includes("Draft: not signed off") && text().includes("studio-check-v1.0"), "saved as a draft", 6000);
+  });
+
+  const openStudioForm = async () => {
+    click(q(".nav-item[data-view=\"missions\"]"));
+    await wait(() => !!q("[data-action=\"new-mission\"]"), "the create button");
+    click(q("[data-action=\"new-mission\"]"));
+    await wait(() => !!document.getElementById("draftS"), "the form");
+  };
+  const setField = (id: string, v: string) => { const el = document.getElementById(id) as HTMLInputElement; el.value = v; el.dispatchEvent(new Event("input", { bubbles: true })); };
+  const pickList = (id: string, v: string) => { const el = document.getElementById(id) as HTMLSelectElement; el.value = v; el.dispatchEvent(new Event("change", { bubbles: true })); };
+  const fillStudioForm = (name: string) => {
+    setField("sName", name); setField("sProg", "Project Studio");
+    setField("sGoal", "Find out whether people are still working where we placed them.");
+    setField("sPeople", "People who finished our retail training last year.");
+    setField("sFind", "Whether they still work at the same place\nThe name of their employer");
+  };
+
+  it("the create form shows the steps, a visible privacy note, folded-away settings, a live count, and plain problems before anything is sent", async () => {
+    await openStudioForm();
+    const dialog = document.getElementById("modal")!;
+    expect([...dialog.querySelectorAll(".stepper-item")].map(e => e.textContent!.replace(/^\d/, ""))).toEqual(["Describe", "Draft", "Read", "Save"]);
+    expect(dialog.querySelector(".stepper-item.active")!.textContent).toContain("Describe");
+    expect(dialog.querySelector(".studio-note")!.textContent).toContain("Do not write any person's name or phone number");
+    expect([...dialog.querySelectorAll(".form-section > h3")].map(h => h.textContent!.replace("(optional)", "").trim())).toEqual(["About the mission", "What it is for", "Tone and style"]);
+    expect(dialog.classList.contains("modal-sticky")).toBe(true);           // only the middle scrolls, so the buttons stay in view
+
+    // the optional settings are folded away, with a one-line summary that follows them
+    expect(document.getElementById("sAtt")).toBeNull();
+    expect(document.getElementById("sSummary")!.textContent).toContain("usual attempts");
+    click(document.getElementById("sToggle"));
+    expect(document.getElementById("sAtt")).not.toBeNull();
+    pickList("sWs", "10"); pickList("sWe", "17"); setField("sAtt", "4");
+    const summary = document.getElementById("sSummary")!.textContent!;
+    expect(summary).toContain("4 attempts at most");
+    expect(summary).toContain("10:00 am");
+    expect(summary).toContain("5:00 pm");
+
+    // a live count, amber while the text is too short
+    setField("sGoal", "Too short");
+    expect(document.getElementById("sGoalCount")!.textContent).toBe("9 / 1500");
+    expect(document.getElementById("sGoalCount")!.classList.contains("is-short")).toBe(true);
+    setField("sGoal", "Find out whether people are still working where we placed them.");
+    expect(document.getElementById("sGoalCount")!.classList.contains("is-short")).toBe(false);
+
+    // empty or too-short fields are named in plain words, and nothing is sent
+    setField("sGoal", "");
+    click(document.getElementById("draftS"));
+    const problems = dialog.querySelector(".studio-problems")!.textContent!;
+    for (const w of ["Give the mission a name", "Say what the programme is called", "at least 20 characters", "who the people are", "what you need to find out"]) expect(problems).toContain(w);
+    expect(dialog.textContent).not.toContain("Read the draft");
+    expect((document.getElementById("sAtt") as HTMLInputElement).value).toBe("4"); // what was typed is kept
+
+    // contact hours that end before they start
+    fillStudioForm("Hours check");
+    pickList("sWs", "18"); pickList("sWe", "9");
+    click(document.getElementById("draftS"));
+    expect(dialog.querySelector(".studio-problems")!.textContent).toContain("Contact hours must end after they start.");
+    click(document.getElementById("cancelS"));
+    expect(dialog.classList.contains("modal-sticky")).toBe(false);
+  });
+
+  it("while drafting, the form is locked and shows progress; the next screen keeps its normal layout; going back loses nothing", async () => {
+    await openStudioForm();
+    const dialog = document.getElementById("modal")!;
+    fillStudioForm("Locked check");
+    const realFetchHere = globalThis.fetch;
+    globalThis.fetch = ((u: string, i?: RequestInit) => (String(u).includes("/missions/draft") ? new Promise(r => setTimeout(() => r(realFetchHere(u, i)), 400)) : realFetchHere(u, i))) as typeof fetch;
+    try {
+      click(document.getElementById("draftS"));
+      expect((dialog.querySelector("fieldset.studio-fields") as HTMLFieldSetElement).disabled).toBe(true);
+      expect(dialog.querySelector(".studio-progress")).not.toBeNull();
+      expect(document.getElementById("draftS")!.textContent).toBe("Drafting…");
+      expect((document.getElementById("draftS") as HTMLButtonElement).disabled).toBe(true);
+      await wait(() => dialog.textContent!.includes("Read the draft"), "the draft", 6000);
+    } finally { globalThis.fetch = realFetchHere; }
+    expect(dialog.classList.contains("modal-sticky")).toBe(false);          // the draft screen is unchanged
+    click(document.getElementById("backS"));
+    expect(dialog.classList.contains("modal-sticky")).toBe(true);
+    expect((document.getElementById("sName") as HTMLInputElement).value).toBe("Locked check");
+    expect((document.getElementById("sFind") as HTMLTextAreaElement).value).toContain("The name of their employer");
+    click(document.getElementById("cancelS"));
+    expect(dialog.classList.contains("modal-sticky")).toBe(false);
+    expect(dialog.innerHTML).toBe("");
   });
 });
 
