@@ -45,6 +45,45 @@ Each problem: what we saw, why it happened, how we fixed it.
 - **Cause:** The boxes grow to fit their text, which means measuring them. The first draw happens while the dialog is still hidden, and a hidden box measures as zero.
 - **Fix:** Do not measure while hidden, and measure again as soon as the dialog is shown. A box never needs to measure itself to look right when it is empty.
 
+## "2 months ago I left my job" selected option 2
+
+- **Symptom:** Any reply that started with a digit chose that option, even when the digit was a duration or an amount.
+- **Cause:** The number match looked only at the first word of the reply.
+- **Fix:** A number is a pick only when everything else in the reply is a selection word ("option", "please", "ji", "second"). A test covers durations, years and amounts.
+
+## "I'm not working" was treated as the wrong person
+
+- **Symptom:** The rule for "I am not <name>" (wrong person) also caught "I am not working right now", which is the label of option 3. The person would have been handed to a human as an identity mismatch.
+- **Cause:** The rule matched "I am not" followed by anything.
+- **Fix:** "I am not" counts only when it is not followed by working, employed, studying, interested, sure and similar words. "I am not Asha" still escalates. Both are tested.
+
+## Devanagari words were cut to one letter
+
+- **Symptom:** "हाँ" and "नहीं" were never recognised, so a Hindi consent reply was treated as unclear.
+- **Cause:** Cleaning a reply kept only letters and digits. The vowel signs of Devanagari are a separate kind of character (marks) and were removed, leaving one consonant. Also, the usual "word boundary" in a pattern does not work next to Devanagari.
+- **Fix:** Marks are kept, Devanagari digits become ordinary digits, and words are bounded by "not a letter, mark or digit". Tests cover Devanagari, Hinglish and English.
+
+## A reply that turns an option around still matched it
+
+- **Symptom:** "I do not work at the same place" matched "same place"; "same place or different" picked one option.
+- **Fix:** If more than one option matches, or the rest of the reply holds a negation, the rules do not pick, and the model (if on) or a re-ask takes over.
+
+## A bad phone answer could erase a good one
+
+- **Symptom:** A call that returned an unplaceable answer (for example "it is complicated") for a question that already had a clear answer became the newest answer, so the question showed as "not clear enough" again.
+- **Cause:** The newest answer for a key always wins, and a call saved its answers without looking at what was already known. WhatsApp does not have this problem because it only saves answers that passed its checks.
+- **Fix:** A call's answer below the confidence bar is not saved when a clear one exists. With nothing better it is still saved so a person can see it was said.
+
+## A phone call saved "I don't know" as an employer
+
+- **Symptom:** On a call, free text was saved whatever it said.
+- **Fix:** The same check as WhatsApp is applied: "no", "none", "I don't know" and bare numbers are not answers.
+
+## Making the channel check a rule for every mission blocked saving
+
+- **Symptom:** After the check was added to general mission validation, a dozen existing tests (and, in effect, any hand-written mission that branches without a list of needs) failed to save.
+- **Fix:** The check is enforced only when Mission Studio drafts a mission. Saved missions are not held to it.
+
 ## Still open
 
 - Nothing known on the pages that exist today. The audit that found the items above (every page and dialog, at desktop and phone width) can be run again after any UI change.

@@ -4,6 +4,8 @@
 // The brief describes a programme, never a person. The drafter sees the brief and nothing else.
 import { MissionDraftSchema, MissionInputSchema, type MissionBrief, type MissionDraft, type MissionInput } from "@dozai/contracts";
 import { missionProblems, type MissionBundle } from "./mission";
+import { channelFlowProblems } from "./flow";
+import type { Instrument } from "./instrument";
 
 export interface MissionDrafter {
   readonly kind: "claude" | "scripted";
@@ -65,7 +67,8 @@ export async function draftMission(drafter: MissionDrafter, brief: MissionBrief,
     notes = d.notes ?? [];
     const input = assembleMission(brief, MissionDraftSchema.parse(d), base, ids);
     const parsed = MissionInputSchema.safeParse(input);
-    problems = parsed.success ? missionProblems(parsed.data) : parsed.error.issues.map(i => `${i.path.join(".") || "mission"}: ${i.message}`);
+    // A drafted mission must also ask the same things on WhatsApp and on a call. (Saved missions are not held to this: many were written by hand.)
+    problems = parsed.success ? [...missionProblems(parsed.data), ...channelFlowProblems(parsed.data.instrument as Instrument, parsed.data.evidence_requirements ?? [])] : parsed.error.issues.map(i => `${i.path.join(".") || "mission"}: ${i.message}`);
     if (!problems.length) return { definition: input, problems: [], notes, attempts: attempt, source: drafter.kind };
     fix = problems;
   }

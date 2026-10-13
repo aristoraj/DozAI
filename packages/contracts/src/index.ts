@@ -423,7 +423,7 @@ export type CampaignInput = z.infer<typeof CampaignInputSchema>;
 
 // ---- Conversation (question flow after consent)
 
-export const INTENTS = ["answer", "faq", "stop", "wrong_person", "distress", "deletion", "off_topic", "unclear"] as const;
+export const INTENTS = ["answer", "clarify", "faq", "stop", "wrong_person", "distress", "deletion", "off_topic", "unclear"] as const;
 export type Intent = (typeof INTENTS)[number];
 
 /** What a participant reply means. Produced by rules or by a model; always one of these fixed values. */
@@ -433,6 +433,13 @@ export const ClassificationSchema = z.object({
   value: z.string().max(300).optional(),       // for text questions: the answer
   faq_id: z.string().max(40).optional(),       // for faq: which approved answer
   confidence: z.number().min(0).max(1).default(0.5),
+  /** Answers to OTHER questions found in the same reply, by evidence key. Held until the flow reaches that question. */
+  also: z.array(z.object({
+    key: z.string().max(80),
+    option_key: z.string().max(20).optional(),
+    value: z.string().max(300).optional(),
+    confidence: z.number().min(0).max(1),
+  })).max(20).optional(),
 });
 export type Classification = z.infer<typeof ClassificationSchema>;
 
@@ -446,5 +453,7 @@ export const ConversationStateSchema = z.object({
   messages_sent: z.number().int().nonnegative(),
   last_inbound_at: z.string().nullable(),
   escalation_reason: z.string().optional(),
+  /** Answers the participant gave before we asked for them, by evidence key. Used when the flow reaches that question. */
+  held: z.record(z.string(), z.object({ option_key: z.string().optional(), value: z.string().optional(), confidence: z.number() })).optional(),
 });
 export type ConversationState = z.infer<typeof ConversationStateSchema>;

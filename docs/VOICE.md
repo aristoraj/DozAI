@@ -34,6 +34,22 @@ Generated from the mission, never written by hand:
 
 Each call is given a short context: the person's first name, the language, and what is missing. Never a surname, number, or earlier answers. The case id travels as `source_id`.
 
+## Same questions as WhatsApp
+
+A mission describes its questions twice: the questionnaire (`instrument`: order and branching, used by WhatsApp) and the list of evidence it needs (`evidence_requirements`: order and "ask only if" conditions, used to build the phone form). `packages/core/src/flow.ts` walks every path through the questionnaire and checks that a call would ask the same keys in the same order. The built-in mission passes on all four branches.
+
+What is checked: the same keys in the same order on every path; a need that waits for one a call reaches later; one key asked in two places with different kinds of answer; and a branching mission with no list of needs (a call would ask every question).
+
+Where it is enforced: **Mission Studio drafts** are sent back to the drafter to correct. Saved missions are not held to it, because many were written by hand and some branch without a list of needs; for those, run `channelFlowProblems(mission.instrument, mission.evidence_requirements)` to see the differences.
+
+What a finished call saves follows the same rules as a WhatsApp answer:
+- Free text must be real text. "No", "none" and "I don't know" are not kept.
+- An answer to a question this person would not be asked is not kept (for example a course for someone who works). If the answer it depends on is not known, the answer is kept, as a held answer is on WhatsApp.
+- An unclear answer never replaces a clear one. If there is nothing better it is kept below the confidence bar so a person can see it was said.
+- A clear new answer does replace an older one: that is what a follow-up call is for.
+
+Not the same, on purpose: the exact words. WhatsApp uses the questionnaire's text and the fixed thank-you and re-ask lines (`phrases.ts`). The voice agent says each field's spoken question in its own voice and handles an unclear answer by asking once more in different words, as the form instructs. Confidence also differs: a typed option is 0.95, a model-read one is capped at 0.85, a call's free text is 0.85.
+
 ## Safety, in layers
 
 | Layer | What it does |
