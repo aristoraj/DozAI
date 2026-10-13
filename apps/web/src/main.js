@@ -508,11 +508,26 @@ async function fillConversation(boxId, caseId) {
   try {
     const d = await api(`/cases/${caseId}/conversation`);
     const box = $(boxId); if (!box) return;
+    const sig = JSON.stringify(d); // a refresh that brings nothing new leaves the panel (and its scroll position) alone
+    if (box.dataset.case === caseId && box.dataset.sig === sig) return;
+    box.dataset.case = caseId; box.dataset.sig = sig;
     const bubbles = d.messages.map(x => `<div style="display:flex;justify-content:${x.from === "participant" ? "flex-end" : "flex-start"};margin:6px 0"><div class="t-sm" style="max-width:85%;padding:8px 11px;border-radius:12px;white-space:pre-wrap;background:${x.from === "participant" ? "var(--teal-soft)" : "var(--surface)"};border:1px solid var(--line)">${esc(x.text)}</div></div>`).join("");
     setTabCount("conversation", d.messages.length);
     box.innerHTML = `<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:6px"><span class="status ${d.status === "escalated" ? "review" : d.status === "done" ? "confirmed" : "progress"}">${esc(CONV_LABEL[d.status] || d.status)}</span><small style="color:var(--muted)">${d.answered} answered${d.reasks ? ` · ${d.reasks} re-asked` : ""}</small></div>${d.escalation_reason ? `<p class="t-sm danger-text" style="margin:4px 0">Needs a person: ${esc(d.escalation_reason.replace(/_/g, " "))}</p>` : ""}${bubbles || `<p class="muted t-sm">No questions have been asked yet. The interview starts when the participant agrees to continue.</p>`}`;
   } catch (e) { const box = $(boxId); if (box) box.innerHTML = `<p class="muted t-sm">${esc(e.message)}</p>`; }
 }
+
+// New replies and questions arrive while someone is looking at a conversation: refresh the one on screen every few seconds.
+let convPollBusy = false;
+async function pollConversation() {
+  if (convPollBusy || document.hidden || !state.loaded) return;
+  convPollBusy = true;
+  try {
+    if (caseDrawer.classList.contains("open") && state.caseTab === "conversation" && state.caseTabFor && $("convBox")) await fillConversation("convBox", state.caseTabFor);
+    else if (state.view === "reviews" && state.reviewSelected && $("reviewConv")) await fillConversation("reviewConv", state.reviewSelected);
+  } finally { convPollBusy = false; }
+}
+setInterval(pollConversation, 5000);
 
 function closeDrawer() { caseDrawer.classList.remove("open"); caseDrawer.setAttribute("aria-hidden", "true"); drawerBackdrop.hidden = true; caseDrawer.innerHTML = ""; /* do not leave personal data in the page */ }
 
