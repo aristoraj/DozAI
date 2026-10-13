@@ -9,7 +9,7 @@
 // look at a call that really exists.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { buildCallContext, decryptPhone, describeNeed, ingestVoiceResult, type CallStatus, type CaseService, type VoiceFormDefinition, type VoiceResult } from "@dozai/core";
+import { buildCallContext, decryptPhone, describeNeed, ingestVoiceResult, knownForCall, type CallStatus, type CaseService, type VoiceFormDefinition, type VoiceResult } from "@dozai/core";
 
 // ---- the port -------------------------------------------------------------------------------------------------------
 
@@ -273,7 +273,7 @@ export async function dispatchVoice(svc: CaseService, tenant: string, voice: Voi
 
     const mission = await svc.getMission(tenant, c.mission_version);
     const asked = Array.isArray(o.payload.asked) ? (o.payload.asked as string[]) : null;
-    const context = buildCallContext({ first_name: p.first_name ?? p.display_name.split(" ")[0] ?? "there", programme: mission.programme_name ?? cfg.defaultProgramme, language: p.language, missing: asked ? asked.map(k => describeNeed(mission, k)) : null });
+    const context = buildCallContext({ first_name: p.first_name ?? p.display_name.split(" ")[0] ?? "there", programme: mission.programme_name ?? cfg.defaultProgramme, language: p.language, missing: asked ? asked.map(k => describeNeed(mission, k)) : null, known: asked ? knownForCall(mission, asked, await svc.store.listEvidence(c.case_id)) : undefined });
     const formId = Number(o.payload.form_id), at = typeof o.payload.start_at === "string" ? o.payload.start_at : undefined;
     try {
       const base = { form_id: formId, phone: `+${digits}`, context, source_id: c.case_id };

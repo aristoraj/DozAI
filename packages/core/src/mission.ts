@@ -175,7 +175,9 @@ const titleCase = (s: string) => s.replace(/[_-]+/g, " ").replace(/^\w/, c => c.
 
 /** Turns a validated definition into the stored bundle. */
 export function bundleFromInput(input: MissionInput, by: string, now: Date): MissionBundle {
-  const instrument = input.instrument as Instrument;
+  // Saving a wording as approved is the sign-off, and it is recorded here whatever the input claims: who did it, and when.
+  const { signed_off: _claimed, ...given } = input.instrument as Instrument;
+  const instrument: Instrument = given.draft ? given : { ...given, signed_off: { by, at: now.toISOString() } };
   const order: string[] = [];
   const byModule = new Map<string, string[]>();
   for (const q of instrument.questions) {

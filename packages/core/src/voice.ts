@@ -93,7 +93,12 @@ function fieldFor(m: MissionBundle, key: string, label: string, hint: string | u
   if (hint) parts.push(hint);
   parts.push("Ask it once. If you did not understand, ask again once in different words, then move on and leave the field empty.");
   // Asked only when the call details list it as still needed, and (if it depends on an earlier answer) only then.
-  const condition = `Ask only if "${key}" is listed under Still needed in the call details${when ? `, and (${asCondition(when)})` : ""}.`;
+  // A field that depends on an earlier answer is asked ONLY when that answer fits, and is otherwise never asked: the voice agent
+  // read "listed under Still needed" as permission to ask a field whose own condition was not met. A field that depends on nothing
+  // is asked only while it is still needed.
+  const condition = when
+    ? `Ask ONLY if ${asCondition(when)}. If the answer is anything else, skip this field completely and never ask it.`
+    : `Ask only if "${key}" is listed under Still needed in the call details.`;
   const mapping = isChoice ? options.map(o => `${[o.label, ...(o.synonyms ?? [])].map(x => `"${x}"`).join(", ")} -> ${code(o.value)}`).join("; ") : undefined;
   return {
     field_id: key, field_name: label, datatype: q?.type === "yesno" ? "boolean" : "string", field_kind: "outcome", analysis_type: q?.type === "text" ? "qualitative" : "quantitative",
@@ -114,7 +119,7 @@ Rules for the whole call:
 - Go through the form's fields in order and say each question naturally, as one short sentence of speech. Never read a field name, a field code or an answer code aloud.
 - Ask each question once. If you did not understand, ask once more in different words, then move on and leave the field empty.
 - Once the person has answered a question, never ask it again, even if you are unsure: record what they said and move on.
-- Ask only the fields whose condition is met. Never ask something the call details list as already known.
+- Ask only the fields whose condition is met. A field with an "only if" condition is skipped completely, never asked, when the condition is not met. Never ask something the call details list as already known.
 - If the person is not who we expected, declines, asks you to stop, sounds upset, or asks for their data to be deleted: be polite, ask nothing else, and end the call. If they are upset or ask for deletion, say a person from the team will follow up.
 - Never promise jobs, money or outcomes. Never share anything about other people. Do not comment on whether their answers are good or bad.
 - Before you finish, go back over the fields whose condition is met. If one still has no answer and the person has not refused it, ask it now.
@@ -203,10 +208,13 @@ export function normaliseVoiceAnswer(q: Question | undefined, raw: unknown): { v
   if (!text) return null;
   if (q && (q.type === "yesno" || q.type === "choice")) {
     const hit = matchOption(norm(text), q);
-    if (hit) return { value: hit.value, confidence: 0.8 };
+    // The voice service already turns what was said into one of our option codes, so an exact code is as sure as a tapped option.
+    // A phrase we had to match to an option ourselves is a little less sure.
+    if (hit) return { value: hit.value, confidence: norm(hit.value) === norm(text) ? 0.95 : 0.85 };
     return { value: text.slice(0, 120), confidence: 0.5 }; // said something we could not place: kept, but below the bar
   }
-  return { value: text.slice(0, 300), confidence: 0.7 }; // spoken free text may be mis-heard, so a little below typed
+  // Free text was extracted from speech: clear enough to rely on, and anything that must match the programme record is still checked against it.
+  return { value: text.slice(0, 300), confidence: 0.85 };
 }
 
 export interface IngestResult { applied: boolean; action: "ignored" | "pending" | "answered" | "no_answer" | "opted_out" | "wrong_person" | "refused_call"; finished: boolean; detail?: string }
@@ -275,6 +283,17 @@ export async function ingestVoiceResult(svc: CaseService, tenant: string, caseId
 }
 
 /** A need as the voice agent is told about it: its label, and the condition under which to ask. */
+/** What is already known that decides which of the asked fields apply ("Current work status is same job"), so the voice agent need not ask it again. */
+export function knownForCall(mission: MissionBundle, asked: string[], evidence: { question_id: string; value: string; at?: string }[]): string[] {
+  const out = new Set<string>();
+  for (const key of asked) {
+    const parent = mission.evidence_requirements?.find(x => x.key === key)?.when?.key;
+    if (!parent) continue;
+    const last = evidence.filter(e => e.question_id === parent && e.value && e.value !== "[erased]").sort((a, b) => (a.at ?? "").localeCompare(b.at ?? "")).at(-1);
+    if (last) out.add(`${(mission.evidence_requirements?.find(x => x.key === parent)?.label ?? parent).toLowerCase()} is ${last.value.replace(/_/g, " ")}`);
+  }
+  return [...out];
+}
 export function describeNeed(mission: MissionBundle, key: string): { key: string; label: string; condition?: string } {
   const r = mission.evidence_requirements?.find(x => x.key === key);
   const label = r?.label ?? key.replace(/_/g, " ");
@@ -297,7 +316,8 @@ export async function planCall(svc: CaseService, c: CaseRecord): Promise<{ form:
   const report = evaluateRequirements(mission, await svc.store.listEvidence(c.case_id), person?.recorded_employer);
   // What is missing now, plus the required needs that depend on an answer we do not have yet: the call will get that answer
   // and must then know to ask for them (a person who says they work somewhere is asked where, and as what).
-  const need = report.items.filter(x => x.required && ((x.applicable && (x.state === "missing" || x.state === "conflict")) || (!x.applicable && x.note === "Depends on an earlier answer.")));
+  // Optional needs are asked too: a call is already happening, and "do you want job support" is the question that matters most to the person.
+  const need = report.items.filter(x => (x.applicable && (x.state === "missing" || x.state === "conflict")) || (!x.applicable && x.note === "Depends on an earlier answer."));
   if (!need.length) throw new DozaiError("NOTHING_MISSING", "everything this mission needs is already known, so there is nothing to ask on a call");
   return { form: link, missing: need.map(x => describeNeed(mission, x.key)) };
 }

@@ -42,11 +42,12 @@ describe("placing the calls the agent asked for", () => {
     expect(call.context).toContain("Language: Hindi");
     expect(call.context).toContain("1. Current work status (field work_status)\n");
     expect(call.context).toContain("2. Employer (field employer_name), only if current work status is same job or changed job");
-    expect(call.context).toContain("5. What they study or train for (field course), only if current work status is education training");
+    expect(call.context).toContain("What they study or train for (field course), only if current work status is education training");
+    expect(call.context).toContain("Wants job support (field support_requested)"); // optional needs are asked on a call too
     expect(call.context).not.toContain("Kumari");
     expect(call.context).not.toContain(PHONE);
     expect(await svc.getCase(DEMO_TENANT, "C-1")).toMatchObject({ status: "calling" });
-    expect(await svc.store.getCall(DEMO_TENANT, call.communication_id)).toMatchObject({ status: "in_progress", case_id: "C-1", form_id: 900, reason: "No reply for two days.", asked: ["work_status", "employer_name", "role_title", "not_working_reason", "course"] });
+    expect(await svc.store.getCall(DEMO_TENANT, call.communication_id)).toMatchObject({ status: "in_progress", case_id: "C-1", form_id: 900, reason: "No reply for two days.", asked: ["work_status", "employer_name", "role_title", "change_reason", "not_working_reason", "job_search", "course", "support_requested"] });
     expect((await svc.store.listOutbox(DEMO_TENANT)).find(o => o.kind === "voice_call")?.status).toBe("sent");
     expect(JSON.stringify(await svc.store.listEvents(DEMO_TENANT, "C-1"))).toContain("Phone call started");
     expect(JSON.stringify(await svc.store.listEvents(DEMO_TENANT, "C-1"))).not.toContain(PHONE);
@@ -161,6 +162,20 @@ describe("the provider's callback is only a doorbell", () => {
     await storeVoiceCallback(w2.svc, DEMO_TENANT, { communication_id: v2.calls[0]!.communication_id });
     now = new Date("2026-10-13T06:00:00Z");
     expect(await processVoiceInbox(w2.svc, DEMO_TENANT, v2)).toMatchObject({ processed: 0, errors: 1 });
+  });
+});
+
+describe("telling the voice agent what is already known", () => {
+  it("says the earlier answer that decides which fields apply, so it is not asked again and the conditions can be judged", async () => {
+    const { svc, ask } = await world();
+    await svc.store.addEvidence({ evidence_id: "ev1", case_id: "C-1", question_id: "work_status", value: "same_job", source: "whatsapp", confidence: 0.95, event_id: "e", at: new Date().toISOString() });
+    await ask();
+    const voice = new FakeVoice();
+    await dispatchVoice(svc, DEMO_TENANT, voice, cfg());
+    const ctx = voice.calls[0]!.context;
+    expect(ctx).toContain("Already known (do not ask again): current work status is same job.");
+    expect(ctx).not.toContain("(field work_status)");
+    expect(ctx).toContain("(field employer_name)");
   });
 });
 

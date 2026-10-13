@@ -302,7 +302,7 @@ describe("phone calls over the API", () => {
     expect(detail.requirements).toMatchObject({ gaps: [], collected: 3 });
     expect(detail.evidence.map((e: { source: string }) => e.source)).toEqual(["voice", "voice", "voice"]);
     expect(detail.calls).toHaveLength(1);
-    expect(detail.calls[0]).toMatchObject({ status: "completed", reason: "No reply to WhatsApp for two days.", asked: ["work_status", "employer_name", "role_title", "not_working_reason", "course"] });
+    expect(detail.calls[0]).toMatchObject({ status: "completed", reason: "No reply to WhatsApp for two days.", asked: ["work_status", "employer_name", "role_title", "change_reason", "not_working_reason", "job_search", "course", "support_requested"] });
     expect((await call("POST", `/cases/${id}/simulate-call`, { outcome: "answered" })).status).toBe(400); // nothing in progress any more
   });
 
@@ -709,5 +709,92 @@ describe("the page asking whether a call has finished", () => {
 
   it("answers an empty result when phone calls are off", async () => {
     expect((await start().call("POST", "/voice/sync", {})).json).toEqual({ checked: 0, applied: 0, woken: [], errors: [] });
+  });
+});
+
+describe("signing off the questionnaire wording", () => {
+  it("saves a new approved version with who signed it and when, and makes it the one new participants join", async () => {
+    const { call } = start();
+    const before = (await call("GET", "/missions")).json;
+    expect(before.missions[0]).toMatchObject({ instrument_signed_off: false, signed_off: null });
+    expect((await call("POST", "/missions/MSN-001-v1.3/sign-off", { confirm: true }, "reviewer")).status).toBe(403);
+    expect((await call("POST", "/missions/MSN-001-v1.3/sign-off", {}, "admin")).status).toBe(400); // must say it was read
+    const r = await call("POST", "/missions/MSN-001-v1.3/sign-off", { confirm: true }, "admin");
+    expect(r.status).toBe(201);
+    expect(r.json.mission).toMatchObject({ version: "MSN-001-v1.3-signed", instrument_signed_off: true, signed_off: { by: "admin:dev-user" } });
+    expect(Date.parse(r.json.mission.signed_off.at)).not.toBeNaN();
+    const after = (await call("GET", "/missions")).json;
+    expect(after.default_version).toBe("MSN-001-v1.3-signed"); // new participants join the signed-off one
+    expect(after.missions[0]).toMatchObject({ version: "MSN-001-v1.3", instrument_signed_off: false }); // the old version is untouched
+    // the wording itself is unchanged: only the approval differs
+    const a = (await call("GET", "/missions/MSN-001-v1.3/definition")).json.definition.instrument, b = (await call("GET", "/missions/MSN-001-v1.3-signed/definition")).json.definition.instrument;
+    expect({ ...b, draft: true, signed_off: undefined }).toEqual({ ...a, signed_off: undefined });
+  });
+
+  it("cannot be done twice, and a second sign-off of the old version gets its own name", async () => {
+    const { call } = start();
+    await call("POST", "/missions/MSN-001-v1.3/sign-off", { confirm: true }, "admin");
+    expect((await call("POST", "/missions/MSN-001-v1.3-signed/sign-off", { confirm: true }, "admin")).json.error.code).toBe("ALREADY_SIGNED_OFF");
+    expect((await call("POST", "/missions/MSN-001-v1.3/sign-off", { confirm: true }, "admin")).json.mission.version).toBe("MSN-001-v1.3-signed2");
+  });
+
+  it("records the person who saved an approved wording, whatever the form claimed", async () => {
+    const { call } = start();
+    const def = (await call("GET", "/missions/MSN-001-v1.3/definition")).json.definition;
+    const forged = { ...def, version: "MSN-001-v9.0", instrument: { ...def.instrument, draft: false, signed_off: { by: "someone-important", at: "2020-01-01T00:00:00.000Z" } } };
+    const r = await call("POST", "/missions", forged, "admin");
+    expect(r.status).toBe(201);
+    expect(r.json.mission.signed_off.by).toBe("admin:dev-user");
+    expect(r.json.mission.signed_off.at).not.toBe("2020-01-01T00:00:00.000Z");
+    // and a draft never carries a sign-off
+    const draft = await call("POST", "/missions", { ...def, version: "MSN-001-v9.1", instrument: { ...def.instrument, draft: true, signed_off: { by: "x", at: "y" } } }, "admin");
+    expect(draft.json.mission.signed_off).toBeNull();
+  });
+});
+
+describe("Mission Studio over the API", () => {
+  const brief = { name: "Six-month placement check", programme_name: "Project Udaan", goal: "Find out whether people we placed in jobs are still working there six months on.", people: "Young people who finished a retail training with us.", find_out: "Whether they still work at the same place\nThe name of their employer\nWhether they want job support" };
+
+  it("turns a plain brief into a draft mission that can be saved, read and signed off, and is limited to administrators", async () => {
+    const { call } = start();
+    expect((await call("POST", "/missions/draft", brief, "operator")).status).toBe(403);
+    expect((await call("POST", "/missions/draft", { ...brief, goal: "too short" }, "admin")).status).toBe(400);
+    expect((await call("POST", "/missions/draft", { ...brief, extra: "x" }, "admin")).status).toBe(400); // only what the brief asks for
+    const r = (await call("POST", "/missions/draft", brief, "admin")).json;
+    expect(r).toMatchObject({ problems: [], source: "scripted", attempts: 1 });
+    expect(r.definition.instrument.draft).toBe(true);
+    expect((await call("GET", "/missions")).json.missions).toHaveLength(1); // drafting saves nothing
+
+    const saved = await call("POST", "/missions", r.definition, "admin");
+    expect(saved.status).toBe(201);
+    expect(saved.json.mission).toMatchObject({ version: r.definition.version, instrument_signed_off: false, signed_off: null, name: "Six-month placement check" });
+    expect(saved.json.mission.requirements.map((x: { label: string }) => x.label)).toEqual(["Whether they still work at the same place", "The name of their employer", "Whether they want job support"]);
+
+    const signed = await call("POST", `/missions/${r.definition.version}/sign-off`, { confirm: true }, "admin");
+    expect(signed.json.mission).toMatchObject({ instrument_signed_off: true, signed_off: { by: "admin:dev-user" } });
+  });
+
+  it("copies the first message, contact rules and employee from the mission it starts from, and applies the brief's own contact rules", async () => {
+    const { call } = start();
+    const r = (await call("POST", "/missions/draft", { ...brief, start_from: "MSN-001-v1.3", max_attempts: 2, window_start_hour: 11, window_end_hour: 16 }, "admin")).json;
+    expect(r.definition.intro_template).toBe("placement_intro_v1");
+    expect(r.definition.policy).toMatchObject({ maxAttempts: 2, windowStartHour: 11, windowEndHour: 16 });
+    expect((await call("POST", "/missions/draft", { ...brief, start_from: "no-such-mission" }, "admin")).status).toBe(404);
+  });
+
+  it("does not draft while the agent is switched off, because drafting uses the model", async () => {
+    const { call } = start();
+    await call("POST", "/controls", { paused: true, reason: "test" }, "admin");
+    const r = await call("POST", "/missions/draft", brief, "admin");
+    expect(r.status).toBe(429);
+    expect(r.json.error.code).toBe("AGENT_PAUSED");
+  });
+
+  it("each draft gets a version name nothing else uses", async () => {
+    const { call } = start();
+    const a = (await call("POST", "/missions/draft", brief, "admin")).json.definition;
+    await call("POST", "/missions", a, "admin");
+    const b = (await call("POST", "/missions/draft", brief, "admin")).json.definition;
+    expect(b.version).not.toBe(a.version);
   });
 });

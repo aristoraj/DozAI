@@ -122,3 +122,4 @@ export * from "./jobs";
 export * from "./classifier";
 export * from "./voice";
 export * from "./zolabs-auth";
+export * from "./claude-missions";

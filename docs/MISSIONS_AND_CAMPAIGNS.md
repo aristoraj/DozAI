@@ -63,3 +63,17 @@ Create the Catalyst Cron job once (Cloud Scale > Cron > job that calls the `cron
 - **Reading 10,000 cases each minute is too slow.** The scheduler lists all cases on every run, which is fine for hundreds and will become the bottleneck near the thousands. The fix is an indexed lookup of "draft cases for this mission" (Data Store columns for status and mission). Do it before the first large campaign. Listed in the audit.
 - **People who could not be sent to** stay in the waiting state with a failed message; the screen counts them but there is no one-click retry yet.
 - **Quality score.** If many people report the number or reply "not interested", Meta can reduce the sending limit. The approved wording, the clear opt-out and the consent attestation on import are what protect it.
+
+## Mission Studio: writing a mission in plain words (13 October 2026)
+
+A mission no longer has to be written as JSON. On the Mission page, **Create a mission** asks for a brief in plain language: the goal, who the people are, what must be found out (one thing per line), the tone, and optionally the contact hours and attempts. It also asks which existing mission to copy the first-message template, the contact rules and the employee from, because the first WhatsApp message must be a template approved by WhatsApp and cannot be drafted.
+
+**Draft with Claude.** The drafter (Claude when a key is set, a plain scripted drafter otherwise) turns the brief into the structure the platform runs on: the goal, the evidence checklist (what must be known, which things depend on an earlier answer), the questions with answer choices and branching, the fixed messages, the answers to common questions, the suggested approach and working notes, plus a list of assumptions to check. It sees the brief only, never anything about a person, and the brief screen says not to write names or phone numbers.
+
+**Checked like any mission.** The draft goes through exactly the rules a saved mission must pass (every need has a question that can fill it, no loops, no dangling jumps, conditions that can happen). If it fails, the drafter is given its own mistakes and tries again, up to three times. Nothing is saved while drafting.
+
+**Always a draft.** A drafted mission is saved as DRAFT wording. The drafter cannot approve its own work: only a person signs the wording off on the Mission page (see the Questionnaire wording card), which saves a new signed-off version with their name and the time on it. Until then every real reply is handed to a person.
+
+**Still JSON underneath, on purpose.** The structure lets the employee know what is still missing for each person, lets reports compare cases, and keeps questions in approved wording. "Add from JSON" remains for developers, and "Edit as JSON" on the review screen opens the draft for fine changes.
+
+Drafting uses the model, so the kill switch and the daily spend limit apply to it.

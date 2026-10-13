@@ -2,8 +2,9 @@
 import express, { type NextFunction, type Request, type Response } from "express";
 import { ZodError } from "zod";
 import { timingSafeEqual } from "node:crypto";
-import { DeleteCaseInputSchema, ImportInputSchema, ReviewDecisionInputSchema, RunAgentInputSchema, ROLES, type CaseRecord, type Principal, type Role } from "@dozai/contracts";
-import type { EmployeeDefinition } from "@dozai/core";
+import { DeleteCaseInputSchema, ImportInputSchema, MissionBriefSchema, ReviewDecisionInputSchema, RunAgentInputSchema, ROLES, type CaseRecord, type Principal, type Role } from "@dozai/contracts";
+import type { EmployeeDefinition, MissionDrafter } from "@dozai/core";
+import { draftMission, ScriptedMissionDrafter } from "@dozai/core";
 import { GatewayTools, ACTION_KINDS, ACTION_LABELS, actionKindOf, approvalStats, MEMORY_SPEC, replaySession, type OutboxItem, buildAgentContext, buildVoiceForm, voiceFormHash, CampaignService, CaseService, ConversationRunner, evaluateRequirements, questionById, DozaiError, DEMO_TENANT, InMemoryStore, importParticipants, seedDemo, type CampaignAction, type MissionBundle } from "@dozai/core";
 import { dispatchVoice, syncCalls, FakeChannels, FakeVoice, matchSignatureVariant, processInbox, processVoiceInbox, recordRejected, storeInteraktEvent, storeVoiceCallback, tick, type VoiceDispatchConfig, type VoicePort, type AgentRuntimePort, type ChannelPort } from "@dozai/adapters";
 import { auditView, caseView } from "./views";
@@ -27,6 +28,8 @@ export interface AppDeps {
   bootstrap?: { token: string; emails: string[]; invite: (req: Request, email: string) => Promise<void> };
   /** Token for the scheduler routes under /api/jobs. Long random value; unset disables them. */
   jobToken?: string;
+  /** Turns a plain-language brief into a draft mission. Claude when a key is set, otherwise a plain scripted draft. */
+  drafter?: MissionDrafter;
   /** Interakt WhatsApp: webhook verification and (optionally) the live channel. */
   interakt?: { webhookSecret: string; piiKey: string; tenant: string; channel?: ChannelPort; defaultCountryCode?: string };
   /** Phone calls. `webhookSecret` is part of the callback address; the callback body is never trusted, only the call id it names. */
@@ -189,7 +192,7 @@ export function createApp(deps: AppDeps) {
   const missionView = (svc: CaseService, b: MissionBundle) => {
     const p = svc.policyFor(b);
     return {
-      mission_id: b.mission_id, version: b.version, name: b.name, instrument_signed_off: b.instrument_signed_off, builtin: !b.created_at,
+      mission_id: b.mission_id, version: b.version, name: b.name, instrument_signed_off: b.instrument_signed_off, signed_off: b.instrument.signed_off ?? null, builtin: !b.created_at,
       created_at: b.created_at ?? null, created_by: b.created_by ?? null, programme_name: b.programme_name ?? null, intro_template: b.intro_template, agent_guidance: b.agent_guidance ?? null,
       objective: b.objective ?? null, strategy: b.strategy ?? null,
       requirements: (b.evidence_requirements ?? []).map(r => ({ key: r.key, label: r.label, hint: r.hint ?? null, required: r.required ?? true, min_confidence: r.min_confidence ?? 0.6, when: r.when ?? null, checked_against: r.verify_against ?? null })),
@@ -222,9 +225,36 @@ export function createApp(deps: AppDeps) {
   }));
 
   // A mission in the shape the "add a mission" form accepts, so a new version can start from an existing one.
+  const definitionOf = (m: MissionBundle) => ({ mission_id: m.mission_id, version: m.version, name: m.name, programme_name: m.programme_name, intro_template: m.intro_template, templates: m.templates, policy: m.policy_overrides, agent_guidance: m.agent_guidance, employee_id: m.employee_id, employee_version: m.employee_version, objective: m.objective, evidence_requirements: m.evidence_requirements, strategy: m.strategy, instrument: m.instrument });
   app.get("/api/missions/:version/definition", need("read"), wrap(async (req, res) => {
     const m = await req.ctx.svc.getMission(req.principal!.tenant_id, String(req.params.version));
-    res.json({ definition: { mission_id: m.mission_id, version: m.version, name: m.name, programme_name: m.programme_name, intro_template: m.intro_template, templates: m.templates, policy: m.policy_overrides, agent_guidance: m.agent_guidance, employee_id: m.employee_id, employee_version: m.employee_version, objective: m.objective, evidence_requirements: m.evidence_requirements, strategy: m.strategy, instrument: m.instrument } });
+    res.json({ definition: definitionOf(m) });
+  }));
+
+  // Signing off the wording: saves the same mission as a new version whose questionnaire is approved, recording who did it and when.
+  // A saved mission never changes, so people already on the old version stay on it. New participants and campaigns use the newest.
+  app.post("/api/missions/:version/sign-off", need("admin"), wrap(async (req, res) => {
+    if (req.body?.confirm !== true) throw new DozaiError("CONFIRMATION_REQUIRED", "send {\"confirm\": true} after reading the wording", 400);
+    const { svc } = req.ctx; const t = req.principal!.tenant_id;
+    const m = await svc.getMission(t, String(req.params.version));
+    if (!m.instrument.draft) throw new DozaiError("ALREADY_SIGNED_OFF", "this wording is already signed off", 409);
+    const taken = new Set((await svc.listMissions(t)).map(x => x.version));
+    let version = `${m.version}-signed`; for (let n = 2; taken.has(version); n++) version = `${m.version}-signed${n}`;
+    const made = await svc.createMission(req.principal!, { ...definitionOf(m), version, instrument: { ...m.instrument, draft: false } });
+    res.status(201).json({ mission: { ...missionView(svc, made), employee: await employeeInfo(svc, made) } });
+  }));
+
+  // Mission Studio: a plain-language brief in, a draft mission out. Nothing is saved: a person reads the draft, saves it as a draft
+  // mission, and later signs the wording off. The drafter sees the brief only, never anything about a person.
+  const drafter = deps.drafter ?? new ScriptedMissionDrafter();
+  app.post("/api/missions/draft", need("admin"), wrap(async (req, res) => {
+    const parsed = MissionBriefSchema.safeParse(req.body);
+    if (!parsed.success) throw new DozaiError("INVALID_BRIEF", parsed.error.issues.map(i => `${i.path.join(".") || "brief"}: ${i.message}`).join("; "), 400);
+    const { svc } = req.ctx; const t = req.principal!.tenant_id;
+    const gate = await svc.agentGate(t); // drafting uses the model, so the kill switch and the spend limit apply
+    if (!gate.ok) throw new DozaiError(gate.code, gate.message, 429);
+    const base = await svc.getMission(t, parsed.data.start_from ?? (await svc.defaultMission(t)).version);
+    res.json(await draftMission(drafter, parsed.data, base, (await svc.listMissions(t)).map(m => m.version)));
   }));
 
   // Saved missions never change. A change is a new version; participants already loaded keep the version they started with.

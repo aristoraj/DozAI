@@ -343,6 +343,43 @@ describe("the live app", () => {
     click(q("[data-action=\"voice-check\"]"));
     await wait(() => text().includes("Signed in as simulator"), "connection checked");
   });
+
+  it("shows the questionnaire wording and signs it off from the Mission page", async () => {
+    click(q(".nav-item[data-view=\"missions\"]"));
+    await wait(() => !!q("[data-action=\"read-wording\"]"), "the wording card");
+    expect(text()).toContain("Draft: not signed off");
+    expect(text()).toContain("every reply is handed to a person");
+    click(q("[data-action=\"read-wording\"]"));
+    await wait(() => text().includes("Fixed messages"), "the wording");
+    expect(text()).toContain("Answers to common questions");
+    click(q("[data-action=\"sign-off\"]"));
+    await wait(() => !!document.getElementById("okConfirm"), "the confirmation");
+    expect(document.getElementById("modal")!.textContent).toContain("has read every question and message");
+    click(document.getElementById("okConfirm"));
+    await wait(() => text().includes("Signed off by admin:dev-user"), "signed off", 6000);
+    expect(q("[data-action=\"sign-off\"]")).toBeNull(); // nothing left to sign
+    expect(text()).toContain("-signed");
+  });
+
+  it("creates a mission from a plain brief: draft it, read it, save it as a draft", async () => {
+    click(q(".nav-item[data-view=\"missions\"]"));
+    await wait(() => !!q("[data-action=\"new-mission\"]"), "the create button");
+    click(q("[data-action=\"new-mission\"]"));
+    await wait(() => !!document.getElementById("draftS"), "the brief form");
+    const set = (id: string, v: string) => { const el = document.getElementById(id) as HTMLInputElement; el.value = v; el.dispatchEvent(new Event("input", { bubbles: true })); };
+    set("sName", "Studio check"); set("sProg", "Project Studio");
+    set("sGoal", "Find out whether people are still working where we placed them.");
+    set("sPeople", "People who finished our retail training last year.");
+    set("sFind", "Whether they still work at the same place\nThe name of their employer");
+    click(document.getElementById("draftS"));
+    await wait(() => document.getElementById("modal")!.textContent!.includes("Read the draft"), "the draft", 6000);
+    const m = document.getElementById("modal")!.textContent!;
+    expect(m).toContain("What the employee will find out");
+    expect(m).toContain("Whether they still work at the same place");
+    expect(m).toContain("Nothing is saved yet");
+    click(document.getElementById("saveS"));
+    await wait(() => text().includes("Draft: not signed off") && text().includes("studio-check-v1.0"), "saved as a draft", 6000);
+  });
 });
 
 /** The status text on a case row. */

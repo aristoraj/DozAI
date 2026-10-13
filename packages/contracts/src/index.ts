@@ -242,6 +242,8 @@ export const InstrumentSchema = z.object({
   faq: z.array(z.object({ id: ident, keywords: z.array(z.string().trim().min(1).max(40)).min(1).max(20), answer: text900 })).max(20),
   max_reasks: z.number().int().min(0).max(5),
   max_messages: z.number().int().min(5).max(200),
+  /** Who approved this wording and when. Set by the platform when a wording is saved as approved, never taken from what a person types. */
+  signed_off: z.object({ by: z.string(), at: z.string() }).optional(),
 });
 
 // What a mission needs to learn about each person. The agent works to close the gaps between this list and what it
@@ -343,6 +345,48 @@ export const MissionInputSchema = z.object({
   instrument: InstrumentSchema,
 });
 export type MissionInput = z.infer<typeof MissionInputSchema>;
+
+// ---- Mission Studio: a mission written as a plain-language brief, then drafted into the structure the platform runs on ------------------------
+
+/** What a programme person writes. No names or phone numbers belong here: it describes the programme, not any person. */
+export const MissionBriefSchema = z.object({
+  name: z.string().trim().min(3).max(100),
+  /** How the programme is named to participants in the first message. */
+  programme_name: z.string().trim().min(1).max(80),
+  /** What the mission is trying to achieve, in the writer's own words. */
+  goal: z.string().trim().min(20).max(1500),
+  /** Who the participants are and how they know us. */
+  people: z.string().trim().min(10).max(1000),
+  /** What must be found out about each person, in plain words. One thing per line is clearest. */
+  find_out: z.string().trim().min(10).max(3000),
+  /** Tone, things to avoid, languages, anything the employee should keep in mind. */
+  approach: z.string().trim().max(1500).optional(),
+  /** An existing mission to copy the approved first-message template, the contact rules and the employee from. */
+  start_from: z.string().max(40).optional(),
+  max_attempts: z.number().int().min(1).max(10).optional(),
+  window_start_hour: z.number().min(0).max(24).optional(),
+  window_end_hour: z.number().min(0).max(24).optional(),
+}).strict();
+export type MissionBrief = z.infer<typeof MissionBriefSchema>;
+
+/** What the drafter produces from a brief: the structure under the plain text. Everything in it is a proposal for a person to read and sign off. */
+export const MissionDraftSchema = z.object({
+  /** The goal in a sentence or two. */
+  objective: z.string().trim().min(10).max(400),
+  /** Working notes for the employee, drawn from the approach in the brief. Never overrides the safety rules. */
+  agent_guidance: z.string().trim().max(2000).optional(),
+  strategy: StrategySchema,
+  /** Everything that must be known about a person, each with at least one question that can fill it. */
+  evidence_requirements: z.array(RequirementSchema).min(1).max(20),
+  questions: z.array(QuestionSchema).min(1).max(30),
+  start_message: text900, closing_message: text900, reask_prefix: text900, unsupported_prefix: text900,
+  handover_message: text900, wrong_person_message: text900, distress_message: text900, deletion_message: text900,
+  faq: z.array(z.object({ id: ident, keywords: z.array(z.string().trim().min(1).max(40)).min(1).max(20), answer: text900 })).min(3).max(12),
+  /** Assumptions the drafter made and things a person should check, in plain words. */
+  notes: z.array(z.string().trim().min(3).max(300)).max(12).default([]),
+});
+export type MissionDraft = z.infer<typeof MissionDraftSchema>;
+
 
 // ---- Campaigns: send the first message to many participants, at a safe pace
 

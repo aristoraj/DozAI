@@ -11,7 +11,7 @@ const state = {
   me: null, mission: null, cases: [], audits: [], summary: null, sessions: [],
   missions: [], defaultMission: null, missionShown: null, campaigns: [],
   employees: [], employeeCanEdit: false, employeeShown: null, employeeDef: null, ctxPreview: null,
-  voiceForm: null, voiceFormFor: null, voicePublishing: false,
+  voiceForm: null, voiceFormFor: null, voicePublishing: false, voiceLoading: false, wording: null, wordingFor: null,
   approvals: [], approvalsWaiting: 0, controlsInfo: null, replay: null, voice: null, voiceCheck: null,
   loaded: false, error: null,
   caseFilter: "all", caseSearch: "", reviewSelected: null,
@@ -119,6 +119,11 @@ function render() {
   appView.innerHTML = `<div class="view-enter">${off}${views[state.view]()}</div>`;
   bind();
   if (state.view === "reviews" && state.reviewSelected && $("reviewConv")) fillConversation("reviewConv", state.reviewSelected);
+  // The phone card shows whether the form is published and current as soon as the Mission page opens, without a click on Preview.
+  if (state.view === "missions" && state.me?.voice && state.me.voice !== "off" && !state.voiceLoading) {
+    const v = (state.missionShown ?? state.mission)?.version;
+    if (v && state.voiceFormFor !== v) { state.voiceLoading = true; loadVoiceForm(v).finally(() => { state.voiceLoading = false; }); }
+  }
 }
 
 // ---- command centre -----------------------------------------------------------------------------------------------------------
@@ -292,8 +297,8 @@ function openCampaignModal() {
 }
 
 // ---- add a mission (administrators) -----------------------------------------------------------------------------------------------------
-function openMissionModal() {
-  const s = { text: "", from: state.missionShown?.version ?? state.defaultMission, error: null, running: false };
+function openMissionModal(prefill) {
+  const s = { text: prefill ?? "", from: state.missionShown?.version ?? state.defaultMission, error: null, running: false };
   const draw = () => {
     modal.innerHTML = `<div class="modal-head"><div><h2 id="modalTitle">Add a mission</h2><p>A mission is one client's first message, questions, contact rules and agent notes. Saved missions never change: to change one, add a new version.</p></div><button class="close-button" id="closeModal" aria-label="Close">×</button></div>
       <div class="modal-body"><div class="form-grid">
@@ -735,6 +740,107 @@ function renderSessionViewer(s) {
 const field = (l, v) => `<div class="inspector-field"><small>${esc(l)}</small><strong>${esc(v)}</strong></div>`;
 
 // ---- mission (read only) ---------------------------------------------------------------------------------------------------------------
+// ---- the questionnaire wording: read it, and sign it off --------------------------------------------------------------------------------
+// Everything a participant will be sent, in the order they will see it. Reading it here is what a sign-off is based on.
+function wordingHtml(ins) {
+  const label = id => { const q = ins.questions.find(x => x.id === id); return q ? q.id : id; };
+  const opt = q => (q.type === "yesno" ? ["Yes", "No"] : (q.options || []).map(o => o.label));
+  const qhtml = q => `<div class="check-item" style="align-items:flex-start"><span class="check-mark">${esc(String(ins.questions.indexOf(q) + 1))}</span><span><strong>${esc(q.text)}</strong>
+      <small>${q.type === "text" ? "Free text answer" : "Choose: " + esc(opt(q).join(" / "))}. Saved as <code>${esc(q.evidence_key)}</code>.${q.spoken ? ` On a phone call: “${esc(q.spoken)}”.` : ""}${q.next?.length ? " Then: " + q.next.map(n => (n.when ? `if “${esc(n.when.equals)}”` : "otherwise") + " go to " + (n.goto ? esc(label(n.goto)) : "the end")).join("; ") + "." : ""}</small></span></div>`;
+  const byModule = new Map();
+  for (const q of ins.questions) { if (!byModule.has(q.module)) byModule.set(q.module, []); byModule.get(q.module).push(q); }
+  const fixed = [["Opening after they agree", ins.start_message], ["Closing", ins.closing_message], ["When we could not understand", ins.reask_prefix], ["When they hand over to a person", ins.handover_message], ["Wrong person", ins.wrong_person_message], ["Someone in distress", ins.distress_message], ["Asking for data to be deleted", ins.deletion_message], ["Not a text message", ins.unsupported_prefix]];
+  return `<div style="margin-top:10px">${[...byModule.entries()].map(([mod, qs]) => `<h3 style="font-size:13px;margin:14px 0 4px">${esc(mod.replace(/_/g, " "))}</h3><div class="check-list">${qs.map(qhtml).join("")}</div>`).join("")}
+    <h3 style="font-size:13px;margin:14px 0 4px">Fixed messages</h3><div class="check-list">${fixed.map(([t, v]) => `<div class="check-item"><span class="check-mark">·</span><span><strong>${esc(t)}</strong><small>${esc(v)}</small></span></div>`).join("")}</div>
+    <h3 style="font-size:13px;margin:14px 0 4px">Answers to common questions (${ins.faq.length})</h3><div class="check-list">${ins.faq.map(f => `<div class="check-item"><span class="check-mark">·</span><span><strong>${esc(f.keywords.join(", "))}</strong><small>${esc(f.answer)}</small></span></div>`).join("")}</div></div>`;
+}
+function wordingCard(m) {
+  const w = state.wordingFor === m.version ? state.wording : null;
+  const so = m.signed_off;
+  const status = m.instrument_signed_off
+    ? `<span class="status confirmed">Signed off${so ? ` by ${esc(so.by)} on ${esc(istDay(so.at))}` : ""}</span>`
+    : `<span class="status review">Draft: not signed off</span>`;
+  const signBtn = !m.instrument_signed_off && can("admin") ? `<button class="button primary small" data-action="sign-off">Sign off this wording</button>` : "";
+  const explain = m.instrument_signed_off
+    ? `<p style="font-size:12px;margin:8px 0">This wording was approved for real participants. It cannot be edited: a change is a new version, which has to be signed off again.</p>`
+    : `<p style="font-size:12px;margin:8px 0">Until someone signs this wording off, the interview will not continue on its own with real participants: every reply is handed to a person. Read every question and message below, then sign off.${can("admin") ? "" : " Only an administrator can sign off."}</p>`;
+  return `<section class="card card-pad" style="margin-top:16px"><div class="card-head"><div><h2>Questionnaire wording</h2><p>Every question and message a participant will receive</p></div>${status}</div>
+    ${explain}
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="button ghost small" data-action="read-wording">${w ? "Refresh" : "Read the questionnaire"} (${esc(m.questions_total)} questions)</button>${signBtn}</div>${w ? wordingHtml(w.definition.instrument) : ""}</section>`;
+}
+async function loadWording(version) {
+  try { state.wording = await api("/missions/" + encodeURIComponent(version) + "/definition"); state.wordingFor = version; render(); }
+  catch (e) { toast(e.message, "warning"); }
+}
+
+// ---- Mission Studio: write a mission as a plain brief, let the drafter structure it, read it, save it as a draft ---------------------------------------------
+function openStudioModal() {
+  const s = { step: "brief", running: false, error: null, result: null, brief: { name: "", programme_name: "", goal: "", people: "", find_out: "", approach: "", start_from: state.defaultMission, max_attempts: "", window_start_hour: "", window_end_hour: "" } };
+  const read = () => {
+    const b = s.brief, out = { name: b.name.trim(), programme_name: b.programme_name.trim(), goal: b.goal.trim(), people: b.people.trim(), find_out: b.find_out.trim() };
+    if (b.approach.trim()) out.approach = b.approach.trim();
+    if (b.start_from) out.start_from = b.start_from;
+    for (const k of ["max_attempts", "window_start_hour", "window_end_hour"]) if (String(b[k]).trim() !== "") out[k] = Number(b[k]);
+    return out;
+  };
+  const field = (id, label, hint, rows, value) => `<div class="field full"><label for="${id}">${label}</label><textarea id="${id}" rows="${rows}" style="font:inherit;font-size:13px">${esc(value)}</textarea><small>${hint}</small></div>`;
+  const drawBrief = () => {
+    const b = s.brief;
+    modal.innerHTML = `<div class="modal-head"><div><h2 id="modalTitle">Create a mission</h2><p>Describe the mission in your own words. The drafter turns it into the questions and checklist the employee works from. You read and approve it before anyone is contacted. Do not write any person's name or phone number here.</p></div><button class="close-button" id="closeModal" aria-label="Close">×</button></div>
+      <div class="modal-body"><div class="form-grid">
+        <div class="field"><label for="sName">Mission name</label><input id="sName" value="${esc(b.name)}" placeholder="Six-month placement check" /></div>
+        <div class="field"><label for="sProg">Programme name (as participants see it)</label><input id="sProg" value="${esc(b.programme_name)}" placeholder="Project Udaan" /></div>
+        ${field("sGoal", "What is this mission trying to achieve?", "For example: find out whether people we placed in jobs are still working there six months on, and whether they want support.", 3, b.goal)}
+        ${field("sPeople", "Who are the people?", "For example: young people who finished a three-month retail training with us last year, mostly on basic phones.", 2, b.people)}
+        ${field("sFind", "What must we find out about each person?", "One thing per line is clearest. Say when something only applies to some people, for example: &quot;the name of their employer, if they are working&quot;.", 6, b.find_out)}
+        ${field("sApproach", "Tone, things to avoid, languages (optional)", "For example: be warm and brief; never promise jobs; do not ask about family.", 2, b.approach)}
+        <div class="field full"><label for="sFrom">Use the approved first message, contact rules and employee from</label><select id="sFrom">${state.missions.map(m => `<option value="${esc(m.version)}" ${m.version === b.start_from ? "selected" : ""}>${esc(m.name)} · ${esc(m.version)}</option>`).join("")}</select><small>The first WhatsApp message must be a template approved by WhatsApp, so it is copied rather than drafted.</small></div>
+        <div class="field"><label for="sAtt">Most contact attempts per person (optional)</label><input id="sAtt" type="number" min="1" max="10" value="${esc(b.max_attempts)}" /></div>
+        <div class="field"><label for="sWin">Contact hours, from and to (optional)</label><div style="display:flex;gap:8px"><input id="sWs" type="number" min="0" max="24" placeholder="9" value="${esc(b.window_start_hour)}" /><input id="sWe" type="number" min="0" max="24" placeholder="18" value="${esc(b.window_end_hour)}" /></div></div>
+        ${s.error ? `<p style="color:#b64b48;font-size:12px;grid-column:1/-1;margin:0;white-space:pre-wrap">${esc(s.error)}</p>` : ""}
+      </div></div>
+      <div class="modal-foot"><button class="button ghost" id="cancelS">Cancel</button><button class="button primary" id="draftS" ${s.running ? "disabled" : ""}>${s.running ? "Drafting… this can take a minute" : "Draft the mission"}</button></div>`;
+    $("closeModal").addEventListener("click", closeModal); $("cancelS").addEventListener("click", closeModal);
+    const bind = (id, key) => $(id).addEventListener("input", e => { s.brief[key] = e.target.value; });
+    [["sName", "name"], ["sProg", "programme_name"], ["sGoal", "goal"], ["sPeople", "people"], ["sFind", "find_out"], ["sApproach", "approach"], ["sAtt", "max_attempts"], ["sWs", "window_start_hour"], ["sWe", "window_end_hour"]].forEach(([id, k]) => bind(id, k));
+    $("sFrom").addEventListener("change", e => { s.brief.start_from = e.target.value; });
+    $("draftS").addEventListener("click", async () => {
+      if (s.running) return;
+      s.running = true; s.error = null; drawBrief(); // lock the button at once: drafting takes a while and a second click would start a second draft
+      try { s.result = await api("/missions/draft", { method: "POST", body: read() }); s.step = "review"; s.running = false; drawReview(); }
+      catch (e) { s.running = false; s.error = e.message; drawBrief(); }
+    });
+  };
+  const drawReview = () => {
+    const r = s.result, d = r.definition;
+    const need = d ? d.evidence_requirements.map(x => `<div class="check-item"><span class="check-mark">${x.required === false ? "○" : "●"}</span><span><strong>${esc(x.label)}</strong><small>${x.required === false ? "Optional" : "Required"}${x.when ? `, only if <code>${esc(x.when.key)}</code> is ${esc(x.when.in.join(" or "))}` : ""}${x.verify_against ? ", checked against the programme record" : ""}.${x.hint ? " " + esc(x.hint) : ""}</small></span></div>`).join("") : "";
+    modal.innerHTML = `<div class="modal-head"><div><h2 id="modalTitle">${d ? "Read the draft" : "The draft could not be made"}</h2><p>${d ? `Drafted ${r.source === "claude" ? "by Claude" : "as a plain starting point (no model key is set)"}${r.attempts > 1 ? ` after ${r.attempts} attempts` : ""}. Nothing is saved yet. It will be saved as draft wording: nobody is contacted until a person signs it off.` : "Fix the brief or add detail, then try again."}</p></div><button class="close-button" id="closeModal" aria-label="Close">×</button></div>
+      <div class="modal-body" style="max-height:60vh;overflow:auto">
+        ${r.problems.length ? `<div class="agent-callout" style="border-color:#b64b48"><small>${d ? "Check these" : "Problems"}</small><h3>${esc(r.problems[0])}</h3>${r.problems.length > 1 ? `<p>${r.problems.slice(1, 6).map(esc).join("<br>")}</p>` : ""}</div>` : ""}
+        ${r.notes.length ? `<div class="agent-callout"><small>Assumptions to check</small><p>${r.notes.map(esc).join("<br>")}</p></div>` : ""}
+        ${d ? `<h3 style="font-size:13px;margin:14px 0 4px">Goal</h3><p style="font-size:13px;margin:0">${esc(d.objective)}</p>
+          <h3 style="font-size:13px;margin:14px 0 4px">What the employee will find out</h3><div class="check-list">${need}</div>
+          ${d.strategy ? `<h3 style="font-size:13px;margin:14px 0 4px">Approach</h3><p style="font-size:12px;margin:0">Channels in order: ${d.strategy.channels.map(c => (c === "voice" ? "phone call" : "WhatsApp")).join(", then ")}. Follow up after about ${esc(d.strategy.follow_up_after_hours)} hours of silence.${d.agent_guidance ? " " + esc(d.agent_guidance) : ""}</p>` : ""}
+          ${wordingHtml(d.instrument)}` : ""}
+      </div>
+      <div class="modal-foot"><button class="button ghost" id="backS">← Edit the brief</button>${d ? `<button class="button ghost" id="jsonS">Edit as JSON</button><button class="button primary" id="saveS" ${s.running ? "disabled" : ""}>${s.running ? "Saving…" : "Save as a draft mission"}</button>` : ""}</div>`;
+    $("closeModal").addEventListener("click", closeModal);
+    $("backS").addEventListener("click", () => { s.step = "brief"; drawBrief(); });
+    $("jsonS")?.addEventListener("click", () => { closeModal(); openMissionModal(JSON.stringify(d, null, 2)); });
+    $("saveS")?.addEventListener("click", async () => {
+      if (s.running) return;
+      s.running = true; drawReview();
+      try {
+        const out = await api("/missions", { method: "POST", body: d });
+        closeModal(); state.missionShown = null; state.wording = null; state.wordingFor = null; state.voiceFormFor = null; await loadAll();
+        state.missionShown = await api("/mission?version=" + encodeURIComponent(out.mission.version)); render();
+        toast("Saved as a draft mission. Read the wording on this page and sign it off before contacting anyone.", "success");
+      } catch (e) { s.running = false; s.error = e.message; toast(e.message, "warning"); drawReview(); }
+    });
+  };
+  drawBrief(); modalBackdrop.hidden = false;
+}
+
 // The evidence a mission needs: the checklist the employee works through for every person.
 function needsCard(m) {
   const rs = m.requirements || [];
@@ -762,7 +868,7 @@ async function loadVoiceForm(version) {
 function renderMission() {
   const m = state.missionShown ?? state.mission, r = m.runtime;
   const picker = `<select class="filter-select" id="missionPick" aria-label="Choose a mission">${state.missions.map(x => `<option value="${esc(x.version)}" ${x.version === m.version ? "selected" : ""}>${esc(x.name)} · ${esc(x.version)} (${plural(x.participants, "participant")})</option>`).join("")}</select>`;
-  const actions = `${picker}${can("admin") ? `<button class="button primary" data-action="add-mission">Add a mission</button>` : ""}`;
+  const actions = `${picker}${can("admin") ? `<button class="button primary" data-action="new-mission">Create a mission</button><button class="button ghost" data-action="add-mission">Add from JSON</button>` : ""}`;
   const detail = `<section class="card card-pad" style="margin-top:16px"><div class="card-head"><div><h2>Set up for this client</h2><p>What changes from one mission to the next</p></div>${m.builtin ? `<span class="status not-started">Built in</span>` : `<span class="status confirmed">Saved version</span>`}</div>
       <div class="check-list">
         ${m.employee ? `<div class="check-item"><span class="check-mark">☺</span><span><strong>Done by</strong><small>${esc(m.employee.name)}, ${esc(m.employee.version)} (${m.employee.pinned ? "this exact version" : "follows the current version"}). Open the Employee tab on the Claude engine page to see what it is told.</small></span></div>` : ""}
@@ -785,6 +891,7 @@ function renderMission() {
     <section class="card mission-hero"><div class="mission-meta"><span class="mission-icon">↗</span><div><h2>${esc(m.name)}</h2><p>${esc(m.mission_id)} · ${esc(m.version)}</p></div></div>
       <div class="mission-stats"><div class="mission-stat"><strong>${m.questions_total}</strong><small>Question slots</small></div><div class="mission-stat"><strong>${m.templates.length}</strong><small>Approved messages</small></div><div class="mission-stat"><strong>${m.policy.max_attempts}</strong><small>Contact attempts</small></div><div class="mission-stat"><strong>${esc(m.policy.contact_window)}</strong><small>Contact window</small></div></div></section>
     ${detail}
+    ${wordingCard(m)}
     ${needsCard(m)}
     ${voiceCard(m)}
     <div class="grid two" style="margin-top:16px">
@@ -969,6 +1076,7 @@ function action(name) {
     });
   }
   if (name === "add-mission") openMissionModal();
+  if (name === "new-mission") openStudioModal();
   if (name === "run-batch") {
     act(() => api("/campaigns/run-now", { method: "POST" }), null).then(r => {
       if (!r) return;
@@ -977,6 +1085,19 @@ function action(name) {
     });
   }
   if (name === "voice-check") checkVoice();
+  if (name === "read-wording") loadWording((state.missionShown ?? state.mission).version);
+  if (name === "sign-off") {
+    const m = state.missionShown ?? state.mission;
+    confirmModal({
+      title: "Sign off this wording?",
+      text: `By signing off you confirm that someone responsible for the programme has read every question and message and approves them for real participants. This saves a new version of the mission (${m.version}-signed) with your name and the time on it. New participants and campaigns use it; people already loaded stay on the current version. You will need to publish the phone form for the new version.`,
+      button: "I have read it. Sign off",
+      onConfirm: async () => {
+        const out = await act(() => api("/missions/" + encodeURIComponent(m.version) + "/sign-off", { method: "POST", body: { confirm: true } }), null);
+        if (out) { state.missionShown = null; state.wording = null; state.wordingFor = null; state.voiceFormFor = null; await loadAll(); state.missionShown = await api("/mission?version=" + encodeURIComponent(out.mission.version)); render(); toast("Signed off as " + out.mission.version + ". The interview now continues on its own for participants on this version.", "success"); }
+      },
+    });
+  }
   if (name === "close-session") { state.session = null; state.replay = null; render(); }
   if (name === "pause-platform") confirmModal({ title: "Switch everything off?", text: "No message will be sent, no call placed, no campaign queued and the agent will not be woken until you switch it back on. Replies are still recorded.", button: "Switch everything off", onConfirm: () => saveControls({ paused: true, reason: "Switched off from the console" }, "Everything is switched off.") });
   if (name === "resume-platform") confirmModal({ title: "Switch back on?", text: "Queued messages and calls go out on the next scheduler pass, and timers that came due are acted on. Check the queue first if something wrong was going out.", button: "Switch back on", onConfirm: () => saveControls({ paused: false }, "Back on.") });

@@ -47,7 +47,8 @@ describe("the form published to the voice provider", () => {
 
   it("asks a dependent field only when it is still needed and its earlier answer allows it, in the provider's own style", () => {
     expect(field("work_status").condition_for_asking_this_field).toBe('Ask only if "work_status" is listed under Still needed in the call details.');
-    expect(field("employer_name").condition_for_asking_this_field).toBe('Ask only if "employer_name" is listed under Still needed in the call details, and (work_status = same_job or work_status = changed_job).');
+    expect(field("employer_name").condition_for_asking_this_field).toBe("Ask ONLY if work_status = same_job or work_status = changed_job. If the answer is anything else, skip this field completely and never ask it.");
+    expect(field("course").condition_for_asking_this_field).toContain("Ask ONLY if work_status = education_training");
   });
 
   it("says a written question as speech, and lets a mission word it exactly", () => {
@@ -100,13 +101,13 @@ describe("what the voice agent is told about one person", () => {
 describe("turning what was said into evidence", () => {
   const q = (id: string) => questionById(DRAFT_INSTRUMENT, id);
   it("a spoken choice becomes its option value, and a yes or no becomes yes or no", () => {
-    expect(normaliseVoiceAnswer(q("q_status"), "I work at a different place now")).toEqual({ value: "changed_job", confidence: 0.8 });
-    expect(normaliseVoiceAnswer(q("q_status"), "same_job")).toEqual({ value: "same_job", confidence: 0.8 });
-    expect(normaliseVoiceAnswer(q("q_support"), true)).toEqual({ value: "yes", confidence: 0.8 });
-    expect(normaliseVoiceAnswer(q("q_support"), "nahi")).toEqual({ value: "no", confidence: 0.8 });
+    expect(normaliseVoiceAnswer(q("q_status"), "I work at a different place now")).toEqual({ value: "changed_job", confidence: 0.85 }); // matched from a phrase
+    expect(normaliseVoiceAnswer(q("q_status"), "same_job")).toEqual({ value: "same_job", confidence: 0.95 }); // the exact code from the voice service
+    expect(normaliseVoiceAnswer(q("q_support"), true)).toEqual({ value: "yes", confidence: 0.95 });
+    expect(normaliseVoiceAnswer(q("q_support"), "nahi")).toEqual({ value: "no", confidence: 0.85 });
   });
-  it("free text is kept at a slightly lower confidence, and an answer that matches no option stays below the bar", () => {
-    expect(normaliseVoiceAnswer(q("q_same_employer"), "  Acme Retail  ")).toEqual({ value: "Acme Retail", confidence: 0.7 });
+  it("free text is trusted enough to rely on, and an answer that matches no option stays below the bar", () => {
+    expect(normaliseVoiceAnswer(q("q_same_employer"), "  Acme Retail  ")).toEqual({ value: "Acme Retail", confidence: 0.85 });
     expect(normaliseVoiceAnswer(q("q_status"), "it is complicated")).toEqual({ value: "it is complicated", confidence: 0.5 });
   });
   it("silence is not an answer", () => {
@@ -249,9 +250,9 @@ describe.each(stores)("a finished call on a case: %s", (_n, make) => {
       await svc.store.addEvidence({ evidence_id: "ev1", case_id: "C-1", question_id: "work_status", value: "same_job", source: "whatsapp", confidence: 0.95, event_id: "e", at: new Date().toISOString() });
       const r = await ask(tools, (await svc.getCase(T, "C-1")).version, { reason: "The WhatsApp replies stopped after the first answer." });
       expect(r.error).toBeUndefined();
-      expect((r.data as { will_ask: string[] }).will_ask).toEqual(["Employer", "Job title or work"]);
+      expect((r.data as { will_ask: string[] }).will_ask).toEqual(["Employer", "Job title or work", "Wants job support"]); // optional needs are asked too, but not "why they changed jobs": they work at the same place
       const out = (await svc.store.listOutbox(T)).find(o => o.kind === "voice_call")!;
-      expect(out.payload).toMatchObject({ form_id: 900, asked: ["employer_name", "role_title"], start_at: null, reason: "The WhatsApp replies stopped after the first answer." });
+      expect(out.payload).toMatchObject({ form_id: 900, asked: ["employer_name", "role_title", "support_requested"], start_at: null, reason: "The WhatsApp replies stopped after the first answer." });
       expect(await svc.getCase(T, "C-1")).toMatchObject({ status: "call_scheduled", attempts: 1 });
       expect(JSON.stringify(await svc.store.listEvents(T, "C-1"))).toContain("Phone call requested: The WhatsApp replies stopped after the first answer.");
     });
@@ -259,7 +260,7 @@ describe.each(stores)("a finished call on a case: %s", (_n, make) => {
     it("does not ring someone when everything is already known", async () => {
       const { svc, tools } = await world();
       const e = (id: string, key: string, value: string) => svc.store.addEvidence({ evidence_id: id, case_id: "C-1", question_id: key, value, source: "whatsapp", confidence: 0.95, event_id: "e", at: new Date().toISOString() });
-      await e("e1", "work_status", "not_employed"); await e("e2", "not_working_reason", "seeking");
+      await e("e1", "work_status", "not_employed"); await e("e2", "not_working_reason", "seeking"); await e("e3", "job_search", "yes"); await e("e4", "support_requested", "no");
       expect((await ask(tools, (await svc.getCase(T, "C-1")).version)).error?.code).toBe("NOTHING_MISSING");
     });
 

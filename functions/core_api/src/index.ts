@@ -13,7 +13,7 @@
 import type { Request } from "express";
 import { DEFAULT_POLICY, type ContactPolicy } from "@dozai/domain";
 import { CaseService, ConversationRunner, DozaiError, GatewayTools, InMemoryStore, RuleClassifier, normalizeMsisdn, seedDemo, DEMO_TENANT } from "@dozai/core";
-import { ClaudeAgentRuntime, ClaudeReplyClassifier, DEFAULT_MODEL, FakeVoice, InteraktChannels, RefreshingToken, ScriptedAgentRuntime, ZOLABS_API_URL, ZolabsVoice, mcpOverHttp, restOverHttp } from "@dozai/adapters";
+import { ClaudeAgentRuntime, ClaudeReplyClassifier, DEFAULT_MODEL, FakeVoice, ClaudeMissionDrafter, InteraktChannels, RefreshingToken, ScriptedAgentRuntime, ZOLABS_API_URL, ZolabsVoice, mcpOverHttp, restOverHttp } from "@dozai/adapters";
 import { currentUserEmail, inviteUser, serviceFor } from "@dozai/catalyst";
 import { ROLES, type Principal, type Role } from "@dozai/contracts";
 import { createApp, type RequestContext } from "./app";
@@ -101,5 +101,6 @@ export default createApp({
   jobToken: env.DOZAI_JOB_TOKEN && env.DOZAI_JOB_TOKEN.length >= 32 ? env.DOZAI_JOB_TOKEN : undefined,
   bootstrap: env.DOZAI_BOOTSTRAP_TOKEN && env.DOZAI_BOOTSTRAP_TOKEN.length >= 32 ? { token: env.DOZAI_BOOTSTRAP_TOKEN, emails: Object.keys(roles), invite: inviteUser } : undefined,
   voice,
+  drafter: useClaude ? new ClaudeMissionDrafter() : undefined,
   interakt: piiKey && webhookSecret ? { webhookSecret, piiKey, tenant, channel: liveChannel, defaultCountryCode: defaultCc } : undefined,
 });

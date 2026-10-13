@@ -37,6 +37,8 @@ export interface Instrument {
   faq: FaqEntry[];
   max_reasks: number;
   max_messages: number;
+  /** Who approved this wording and when. Set by the platform, not by the person writing the mission. */
+  signed_off?: { by: string; at: string };
 }
 
 export const YESNO: QuestionOption[] = [
