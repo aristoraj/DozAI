@@ -1,14 +1,19 @@
-// Local development: runs the same wiring as production (functions/core_api/src/index.ts) on an in-memory store seeded
-// with the synthetic cohort. Keys come from .env.local (npm run dev:api loads it). Auth is header-based and dev only.
-// WhatsApp, Claude and phone calls switch on from the keys in .env.local, exactly as they do when deployed.
-process.env.DOZAI_DEV_AUTH = "1";
-delete process.env.DOZAI_STORE; // local is always in-memory, never the Catalyst database
+// Local development: core API + MCP gateway on one in-memory store, seeded with the synthetic cohort.
+// Contact windows are opened 24h so the demo works at any hour. Auth is header-based and dev only.
+import { createApp } from "../functions/core_api/src/app";
+import { mountMcp } from "../appsail/mcp-gateway/src/server";
+import { DEFAULT_POLICY } from "@dozai/domain";
+import { CaseService, ConversationRunner, GatewayTools, InMemoryStore, RuleClassifier, seedDemo } from "@dozai/core";
+import { ScriptedAgentRuntime } from "@dozai/adapters";
+
+const store = new InMemoryStore();
+const svc = new CaseService(store, () => new Date(), { ...DEFAULT_POLICY, windowStartHour: 0, windowEndHour: 24 });
+const tools = new GatewayTools(svc);
 
 async function main() {
-  const { default: app, localSvc } = await import("../functions/core_api/src/index");
-  const { mountMcp } = await import("../appsail/mcp-gateway/src/server");
-  const { GatewayTools } = await import("@dozai/core");
-  mountMcp(app, new GatewayTools(localSvc), process.env.DOZAI_GATEWAY_SECRET ?? "dev-only-secret-dev-only-secret-0000");
+  await seedDemo(store);
+  const app = createApp({ forRequest: () => ({ svc, agent: new ScriptedAgentRuntime(tools), runner: new ConversationRunner(svc, { classifier: new RuleClassifier(), allowDraft: true }) }), devAuth: true, pii: { key: Buffer.alloc(32, 7).toString("base64"), defaultCountryCode: "91" }, runtime: { whatsapp: "off", agent: "scripted", model: null, contact_window: "24 hours (local development)" } });
+  mountMcp(app, tools, process.env.DOZAI_GATEWAY_SECRET ?? "dev-only-secret-dev-only-secret-0000");
 
   const port = Number(process.env.PORT ?? 3001);
   app.listen(port, () => console.log(`DozAI dev API  http://localhost:${port}/api/health   MCP http://localhost:${port}/mcp`));

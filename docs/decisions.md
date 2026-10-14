@@ -205,9 +205,3 @@ Each entry: what we decided, why, and the option we did not take.
 - **Categories reuse `module`.** No new field. The prompt changes from "group by branch" to "give every question a category by purpose", names are tidied, and a model's draft with four or more questions in one category is sent back to be grouped. The plain draft has no model, so it sorts by simple rules and is not held to the one-group check.
 - **The screen shows each category as a heading with its count.** Moving a question to another category, or naming a new one, is a dropdown on Edit and Add. The category is only a label: it does not change the order or the branching.
 - **Not built:** reordering questions, renaming a category for all its questions at once, and per-category rules.
-
-## Running locally with the real wiring (scripts/dev-server.ts)
-
-- **Decision:** `npm run dev` runs the same wiring as the deployed app (`functions/core_api/src/index.ts`) on an in-memory store, with its keys from `.env.local` (optional: a missing file is skipped). Before, it used a separate, simulated setup that ignored `.env.local`, so WhatsApp, Claude and phone calls could not be tried locally. The store is always in memory and dev sign-in is switched on by the script itself, never by the deployed app.
-- **Why this cannot change production:** the dev script is not part of the deployed bundle; the deploy script reads `.env.local` as before; and the production bundle was built and checked: its entry is still the app itself, the extra `localSvc` export used by the dev script is dropped by the bundle's own footer, and no dev sign-in flag is set.
-- **Care:** with `.env.local` loaded, a local run can use the real keys. It uses an in-memory store, so no production data is touched, but real messages or calls are possible if the keys allow them. Use made-up people only.

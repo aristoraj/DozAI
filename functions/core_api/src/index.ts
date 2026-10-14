@@ -69,9 +69,6 @@ const memory = new InMemoryStore();
 const memorySvc = new CaseService(memory, () => new Date(), policy);
 if (devAuth && !useCatalyst) void seedDemo(memory);
 
-// Exposed so the local dev server can mount the MCP gateway on the same store (scripts/dev-server.ts).
-export const localSvc = memorySvc;
-
 const forRequest = (req: Request): RequestContext => {
   const svc = useCatalyst ? serviceFor(req, policy) : memorySvc;
   svc.voiceEnabled = !!voice;
