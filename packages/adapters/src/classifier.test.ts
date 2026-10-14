@@ -62,10 +62,13 @@ describe("when the model is asked", () => {
     }
   });
 
-  it("not for a short name typed to a text question", async () => {
-    const r = reader({ intent: "unclear", confidence: 0.3 });
-    expect(await r.classify(input("Acme Retail", employer))).toMatchObject({ intent: "answer", value: "Acme Retail" });
-    expect(r.calls).toHaveLength(0);
+  it("for a short reply to a text question too: the model checks it is the kind of thing asked for", async () => {
+    const ok = reader({ intent: "answer", answers: [ans("employer_name", "Acme Retail", 0.9, { value: "Acme Retail" })], confidence: 0.9 });
+    expect(await ok.classify(input("Acme Retail", employer))).toMatchObject({ intent: "answer", value: "Acme Retail" });
+    expect(ok.calls).toHaveLength(1);
+    const role = questionById(DRAFT_INSTRUMENT, "q_same_role")!;
+    const odd = reader({ intent: "unclear", confidence: 0.8 });
+    expect(await odd.classify(input("Namee", role))).toMatchObject({ intent: "unclear" }); // not a job title: asked again
   });
 });
 
@@ -104,6 +107,7 @@ describe("what the model is told", () => {
     expect(system).toContain("never write messages");
     expect(system).toContain("copied character for character");
     expect(system).toContain("I am planning to change jobs");
+    expect(system).toContain("Namee");
   });
 
   it("the reply is quoted as data, the request has a fixed schema, and the model has no tools", async () => {

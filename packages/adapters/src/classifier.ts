@@ -42,6 +42,8 @@ Rules for answers:
   "Would you like our team to contact you about job support?" + "that would really help me" = Yes.
   It is not clear when the reply could fit either option ("it is complicated", "sort of", "maybe"): then choose unclear.
 - Text field: give value, copied from the reply: just the name, title or detail itself, without the words around it. Never invent, translate or tidy it up.
+- A text answer must be the kind of thing the question asks for: a job title or a kind of work for "What is your job title or the work you do?", the name of a business, shop or organisation for "the place where you work", a course or subject for "What are you studying?". A person's own name, a greeting, a word with no clear meaning, or something on another topic is NOT an answer to it: choose unclear.
+  "What is your job title or the work you do?" + "Software engineer intern" = answer. + "Namee" = unclear (not a job or kind of work).
 - "no", "none", "nothing", "I don't know", "not sure", "pata nahi" and the like are NOT answers to a text field. If that is all the reply says, the intent is unclear.
 - One reply can answer several fields. "I work at Acme as a cashier" answers an employer field and a job title field if both are listed. Report each one. Do not report a field that is listed under "Already known".
 - A field may say when it is asked. Still report it if the reply clearly gives it; the system decides whether it applies.
@@ -137,7 +139,7 @@ export class ClaudeReplyClassifier implements ReplyClassifier {
     if (first.intent === "faq" && first.confidence < 0.7) return true; // a question the approved explainers do not match: maybe about the question itself
     if (first.intent !== "answer" || i.context !== "question" || !i.question) return false;
     const t = normaliseReply(i.text);
-    if (i.question.type === "text") return t.split(" ").length > 3; // a short name is the answer; a sentence may hold more
+    if (i.question.type === "text") return true; // even a short reply is checked: is it the kind of thing the question asks for?
     return !isPlainSelection(t, i.question); // a bare number or option name is a pick; anything longer may hold more
   }
 
