@@ -175,7 +175,7 @@ describe("motion", () => {
 
 describe("the filter bar style", () => {
   it("the dropdown inside the filter box has a fixed width limit, never a percentage (a percentage once made the box wider than the dropdown)", () => {
-    const css = readFileSync(resolve(process.cwd(), "apps/web/src/styles.css"), "utf8"); // run from the repo root (npm test)
+    const css = readFileSync(resolve(process.cwd(), "apps/web/src/styles/pages/command-centre.css"), "utf8"); // run from the repo root (npm test)
     const rule = css.match(/\.dash-filter \.cs \{([^}]*)\}/)![1]!;
     expect(rule).toMatch(/max-width:\s*\d+px/);
     expect(rule).not.toContain("%");

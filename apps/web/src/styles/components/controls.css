@@ -1,0 +1,58 @@
+/* Form controls: text boxes, checkbox, file picker, custom dropdown (.cs) and number field (.cn). */
+/* Form controls: one look for every text box, text area and number field, then the checkbox and the file picker.
+   :where() keeps the shared look at the lowest priority, so a specific rule (the search box, the number field) can still change it. */
+:where(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), textarea) { padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--white); color: var(--ink); font-size: var(--fs-md); transition: border-color .15s ease, box-shadow .15s ease, background .15s ease; }
+:where(textarea) { resize: vertical; line-height: 1.5; }
+:where(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), textarea):hover:not(:disabled) { border-color: #d8c5b8; }
+:where(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), textarea):focus { outline: 0; border-color: var(--teal-dark); box-shadow: 0 0 0 3px rgba(44, 119, 113, 0.14); }
+:where(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), textarea):disabled { background: var(--surface); opacity: .6; cursor: not-allowed; }
+::placeholder { color: #a39a94; opacity: 1; }
+
+input[type="checkbox"] { -webkit-appearance: none; appearance: none; flex: none; display: inline-grid; place-content: center; width: 18px; height: 18px; margin: 0; border: 1.5px solid #cdbfb5; border-radius: 6px; background: var(--white); cursor: pointer; transition: background .15s ease, border-color .15s ease, box-shadow .15s ease; }
+input[type="checkbox"]::after { content: ""; width: 4px; height: 9px; margin-top: -2px; border: solid var(--white); border-width: 0 2px 2px 0; transform: rotate(45deg) scale(0); transition: transform .12s ease; }
+input[type="checkbox"]:hover:not(:disabled) { border-color: var(--teal-dark); }
+input[type="checkbox"]:checked { border-color: var(--teal-dark); background: var(--teal-dark); }
+input[type="checkbox"]:checked::after { transform: rotate(45deg) scale(1); }
+input[type="checkbox"]:focus-visible { outline: 0; box-shadow: 0 0 0 3px rgba(44, 119, 113, 0.28); }
+input[type="checkbox"]:disabled { opacity: .5; cursor: not-allowed; }
+
+/* Custom file picker (src/file.js). The real <input type="file"> stays hidden inside .cf. */
+.cf { position: relative; display: flex; align-items: center; gap: 10px; min-width: 0; }
+.cf .cf-native { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; opacity: 0; pointer-events: none; }
+.cf-name { min-width: 0; overflow: hidden; color: var(--muted); font-size: var(--fs-sm); text-overflow: ellipsis; white-space: nowrap; }
+.cf-name.has-file { color: var(--ink); font-weight: 700; }
+
+/* Custom dropdowns (src/select.js). The real <select> stays hidden inside .cs. */
+.cs { position: relative; display: inline-block; max-width: 100%; min-width: 0; }
+.field .cs { display: block; }
+.cs .cs-native { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; opacity: 0; pointer-events: none; }
+.cs-trigger { width: 100%; min-width: 0; overflow: hidden; display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 1px solid var(--line); background: var(--white); border-radius: 10px; padding: 10px 10px 10px 12px; color: var(--ink); font-size: var(--fs-md); text-align: left; cursor: pointer; transition: border-color .15s ease, box-shadow .15s ease, background .15s ease; }
+.cs-trigger:hover:not(:disabled) { border-color: #d8c5b8; }
+.cs-trigger[aria-expanded="true"] { border-color: var(--teal-dark); box-shadow: 0 0 0 3px rgba(44, 119, 113, 0.14); }
+.cs-trigger:disabled { background: var(--surface); opacity: .6; cursor: not-allowed; }
+.cs-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-chevron { flex: none; width: 12px; height: 12px; color: var(--muted); transition: transform .18s ease, color .15s ease; }
+.cs-trigger[aria-expanded="true"] .cs-chevron { transform: rotate(180deg); color: var(--teal-dark); }
+.cs-compact .cs-trigger { background: var(--surface-2); padding: 9px 10px 9px 11px; color: var(--body); }
+.role-switcher .cs-trigger, .dash-filter .cs-trigger { border: 0; background: var(--surface); border-radius: 7px; padding: 7px 9px; font-size: var(--fs-sm); font-weight: 700; }
+.cs-list { position: fixed; z-index: 130; margin: 0; padding: 5px; list-style: none; max-width: min(420px, calc(100vw - 16px)); overflow-y: auto; background: var(--surface-2); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); transform-origin: top; animation: csIn .14s ease both; }
+.cs-list.cs-up { transform-origin: bottom; }
+.cs-compact .cs-option { font-size: var(--fs-sm); }
+@keyframes csIn { from { opacity: 0; transform: scale(.97); } }
+.cs-option { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 10px; border-radius: 9px; color: var(--body); font-size: var(--fs-md); line-height: 1.4; cursor: pointer; }
+.cs-option.is-active { background: var(--surface); color: var(--ink); }
+.cs-option[aria-selected="true"] { background: var(--coral-soft); color: var(--coral-dark); font-weight: 700; }
+.cs-option[aria-selected="true"].is-active { background: #f6dccd; }
+.cs-option[aria-disabled="true"] { opacity: .45; cursor: not-allowed; }
+.cs-check { flex: none; width: 12px; height: 12px; opacity: 0; }
+.cs-option[aria-selected="true"] .cs-check { opacity: 1; }
+.cs-empty { padding: 9px 10px; color: var(--muted); font-size: var(--fs-sm); }
+
+/* Custom number fields (src/number.js). The browser's own arrows are hidden. */
+.cn { position: relative; }
+.cn input { padding-right: 62px; -moz-appearance: textfield; appearance: textfield; }
+.cn input::-webkit-inner-spin-button, .cn input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.cn-steps { position: absolute; top: 50%; right: 5px; display: flex; gap: 3px; transform: translateY(-50%); }
+.cn-step { width: 24px; height: 24px; display: grid; place-items: center; border: 0; border-radius: 7px; background: var(--surface); color: var(--body); font-size: var(--fs-md); font-weight: 700; line-height: 1; cursor: pointer; transition: background .15s ease, color .15s ease; }
+.cn-step:hover:not(:disabled) { background: var(--coral-soft); color: var(--coral-dark); }
+.cn-step:disabled { opacity: .4; cursor: not-allowed; }

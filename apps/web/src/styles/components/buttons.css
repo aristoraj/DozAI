@@ -1,0 +1,10 @@
+/* Buttons: primary, coral, teal, ghost, danger, small, disabled. */
+.button { border: 0; border-radius: 11px; padding: 10px 15px; font-size: var(--fs-md); font-weight: 800; cursor: pointer; transition: .17s ease; display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
+.button:hover { transform: translateY(-1px); box-shadow: var(--shadow-sm); }
+.button.primary { background: var(--ink); color: var(--white); }
+.button.coral { background: var(--coral); color: #42251c; }
+.button.teal { background: var(--teal); color: #153e3b; }
+.button.ghost { background: var(--white); color: var(--body); border: 1px solid var(--line); }
+.button.danger { background: #fae6e3; color: var(--red); }
+.button.small { padding: 8px 11px; font-size: var(--fs-sm); }
+.button:disabled { opacity: .45; cursor: not-allowed; transform: none; box-shadow: none; }

@@ -1,0 +1,24 @@
+/* Case panel tabs, summary bar, details list and danger zone. */
+/* Case panel: summary, next step, then four tabs. */
+.summary-bar { display: block; height: 4px; margin-top: 9px; overflow: hidden; border-radius: 999px; background: var(--white); }
+.summary-bar span { display: block; height: 100%; border-radius: inherit; background: var(--teal-dark); transition: width .4s ease; }
+.sim-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 12px 0 0; }
+.sim-row label { color: #785446; font-size: var(--fs-xs); }
+.next-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.drawer-tabs { position: sticky; top: 0; z-index: 2; display: flex; gap: 2px; margin: 0 -20px 6px; padding: 4px 20px 0; overflow-x: auto; border-bottom: 1px solid var(--line); background: var(--surface-2); scrollbar-width: none; }
+.drawer-tab { position: relative; display: inline-flex; align-items: center; gap: 7px; padding: 11px 12px; border: 0; background: transparent; color: var(--muted); font-size: var(--fs-sm); font-weight: 700; white-space: nowrap; cursor: pointer; transition: color .15s ease; }
+.drawer-tab:hover, .drawer-tab[aria-selected="true"] { color: var(--ink); }
+.drawer-tab[aria-selected="true"]::after { content: ""; position: absolute; right: 10px; bottom: -1px; left: 10px; height: 2px; border-radius: 2px; background: var(--coral); }
+.tab-count { min-width: 18px; height: 18px; display: grid; place-items: center; padding: 0 5px; border-radius: 999px; background: var(--surface); color: var(--muted); font-size: var(--fs-xs); font-weight: 800; }
+.drawer-tab[aria-selected="true"] .tab-count { background: var(--coral-soft); color: var(--coral-dark); }
+.drawer-panel { padding-top: 2px; }
+.drawer-panel:not([hidden]) { animation: panelIn .18s ease both; }
+@keyframes panelIn { from { opacity: 0; transform: translateY(4px); } }
+.kv { margin: 0; }
+.kv-row { display: grid; grid-template-columns: minmax(130px, .8fr) 1.4fr; gap: 12px; padding: 11px 0; border-top: 1px solid var(--line); font-size: var(--fs-sm); }
+.kv-row:first-child { border-top: 0; padding-top: 2px; }
+.kv-row dt { color: var(--muted); }
+.kv-row dd { min-width: 0; margin: 0; color: var(--ink); font-weight: 700; overflow-wrap: anywhere; }
+.danger-zone { padding-top: 18px; border-top: 1px solid var(--line); }
+@media (prefers-reduced-motion: reduce) { .drawer-panel:not([hidden]) { animation: none; } .summary-bar span { transition: none; } }
+@media (max-width: 480px) { .kv-row { grid-template-columns: 1fr; gap: 2px; } .sim-row { flex-direction: column; align-items: stretch; } }

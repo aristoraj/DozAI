@@ -1,0 +1,40 @@
+/* Create a mission (Mission Studio): steps, privacy note, grouped sections and sticky buttons. */
+/* "Create a mission" form (Mission Studio): steps, a privacy note, grouped sections, and buttons that stay in view. */
+.modal-sticky { display: flex; flex-direction: column; overflow: hidden; }
+.modal-sticky .modal-body { flex: 1; min-height: 0; overflow-y: auto; }
+.studio-note { display: flex; align-items: flex-start; gap: 12px; margin: 0 0 18px; padding: 13px 15px; border-radius: 14px; background: var(--teal-soft); color: #41615e; font-size: var(--fs-sm); line-height: 1.55; }
+.studio-note p { margin: 0; }
+.studio-note strong { color: var(--teal-dark); }
+.studio-note-icon { flex: none; width: 20px; height: 20px; display: grid; place-items: center; border-radius: 50%; background: var(--teal-dark); color: var(--white); font-size: var(--fs-xs); font-weight: 800; font-style: italic; }
+.studio-problems { margin: 0 0 18px; padding: 13px 15px; border-radius: 14px; background: #fae6e3; color: var(--red); font-size: var(--fs-sm); line-height: 1.5; white-space: pre-wrap; }
+.studio-problems ul { margin: 6px 0 0; padding-left: 20px; }
+.studio-problems p { margin: 4px 0 0; }
+.studio-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
+.form-section { display: grid; gap: 14px; padding: 18px 0; border-top: 1px solid var(--line); }
+.form-section:first-child { padding-top: 0; border-top: 0; }
+.form-section > h3 { margin: 0; color: var(--ink); }
+.opt { color: var(--muted); font-size: var(--fs-sm); font-weight: 400; }
+.field-label { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.field-hint { color: var(--muted); font-size: var(--fs-sm); line-height: 1.5; }
+.field-count { flex: none; color: var(--muted); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+.field-count.is-short { color: var(--amber); font-weight: 700; }
+.field-count.is-long { color: var(--red); font-weight: 700; }
+.settings-toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--white); text-align: left; cursor: pointer; transition: border-color .15s ease, background .15s ease; }
+.settings-toggle:hover { border-color: #d8c5b8; background: var(--surface-2); }
+.settings-toggle strong { color: var(--ink); font-size: var(--fs-md); }
+.settings-toggle small { display: block; margin-top: 3px; color: var(--muted); font-size: var(--fs-sm); line-height: 1.4; }
+.settings-chevron { flex: none; width: 12px; height: 12px; color: var(--muted); transition: transform .18s ease; }
+.settings-toggle[aria-expanded="true"] .settings-chevron { transform: rotate(180deg); }
+.settings-panel { padding-top: 4px; }
+.hours-row { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 8px; color: var(--muted); font-size: var(--fs-sm); }
+.foot-actions { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.foot-note { color: var(--muted); font-size: var(--fs-xs); text-align: right; }
+.studio-progress { position: relative; height: 3px; overflow: hidden; background: var(--surface); }
+.studio-progress::after { content: ""; position: absolute; inset: 0 auto 0 0; width: 35%; background: var(--teal-dark); animation: studioSlide 1.3s ease-in-out infinite; }
+@keyframes studioSlide { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
+@media (prefers-reduced-motion: reduce) { .studio-progress::after { animation: none; width: 100%; opacity: .5; } .settings-chevron { transition: none; } }
+@media (max-width: 680px) {
+  .foot-note { display: none; }
+  .hours-row { grid-template-columns: 1fr; }
+  .hours-row > span { display: none; }
+}

@@ -1,0 +1,8 @@
+/* The check list used by several pages. */
+.check-list { display: grid; gap: 8px; }
+.check-item { display: grid; grid-template-columns: 23px 1fr auto; gap: 9px; align-items: center; padding: 10px; background: var(--surface); border-radius: 11px; }
+.check-mark { width: 23px; height: 23px; display: grid; place-items: center; border-radius: 8px; background: var(--teal-soft); color: var(--teal-dark); font-size: var(--fs-sm); font-weight: 800; }
+.check-item.pending .check-mark { background: #fff1d9; color: var(--amber); }
+.check-item strong, .check-item small { display: block; }
+.check-item strong { color: var(--ink); font-size: var(--fs-sm); }
+.check-item small { color: var(--muted); font-size: var(--fs-xs); }

@@ -1,0 +1,69 @@
+/* Colours, spacing and the type scale (the :root values), the page reset, and the base look of text and buttons. */
+:root {
+  --paper: #fdf8f4;
+  --surface: #f6ede5;
+  --surface-2: #fffdfb;
+  --ink: #1a1a1a;
+  --body: #393330;
+  --muted: #756d68;
+  --line: #e7dad0;
+  --coral: #e8967a;
+  --coral-dark: #9e452d;
+  --coral-soft: #fae8dc;
+  --teal: #8ecfca;
+  --teal-dark: #2c7771;
+  --teal-soft: #e4f5f3;
+  --green: #4f8f65;
+  --amber: #ba772b;
+  --red: #b64b48;
+  --white: #ffffff;
+  --shadow: 0 18px 48px rgba(74, 47, 35, 0.11);
+  --shadow-sm: 0 8px 22px rgba(74, 47, 35, 0.07);
+  --radius-xl: 28px;
+  --radius-lg: 20px;
+  --radius-md: 14px;
+  --sidebar: 250px;
+
+  /* Type scale. Use these, never a raw px size.
+     xs  labels, status pills, table headers, captions, small print
+     sm  secondary text, descriptions, table cells, names in lists
+     md  body text, inputs, buttons
+     lg  card titles (h3)
+     xl  section titles (h2) and large figures
+     2xl big numbers on the overview cards */
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 15px;
+  --fs-xl: 20px;
+  --fs-2xl: 28px;
+  --fs-h1: clamp(26px, 3vw, 36px);
+  /* Letter spacing: tight for big headings and figures, caps for UPPERCASE labels, wide for the small eyebrow labels. */
+  --ls-tight: -.04em;
+  --ls-caps: .06em;
+  --ls-wide: .12em;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html { min-height: 100%; background: var(--paper); }
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--body);
+  background:
+    radial-gradient(circle at 93% 5%, rgba(142, 207, 202, 0.18), transparent 23rem),
+    var(--paper);
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: var(--fs-md);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+button, input, select, textarea { font: inherit; }
+button { color: inherit; }
+small { font-size: var(--fs-xs); } /* the browser's own "smaller" would give 10px or 10.8px */
+button:focus-visible {
+  outline: 3px solid rgba(44, 119, 113, 0.28);
+  outline-offset: 2px;
+}

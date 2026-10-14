@@ -1,0 +1,14 @@
+/* Audit trail: toolbar, rows, actor pill and hash. */
+.audit-toolbar { display: flex; gap: 9px; margin-bottom: 15px; }
+.audit-list { overflow: hidden; }
+.audit-row { display: grid; grid-template-columns: 105px 36px minmax(180px,1fr) 150px 105px; gap: 13px; align-items: center; padding: 13px 17px; border-top: 1px solid var(--line); font-size: var(--fs-sm); }
+.audit-row:first-child { border: 0; }
+.audit-row:hover { background: #fff9f5; }
+.audit-time strong, .audit-time small { display: block; }
+.audit-time strong { color: var(--ink); font-size: var(--fs-sm); }
+.audit-time small { color: var(--muted); font-size: var(--fs-xs); margin-top: 3px; }
+.audit-action strong { display: block; color: var(--ink); font-size: var(--fs-sm); }
+.audit-action small { display: block; color: var(--muted); font-size: var(--fs-xs); margin-top: 3px; }
+.actor-pill { display: inline-flex; align-items: center; gap: 6px; color: var(--body); }
+.actor-pill span { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 7px; background: var(--surface); font-size: var(--fs-xs); font-weight: 800; }
+.hash { color: var(--muted); font-family: ui-monospace, monospace; font-size: var(--fs-xs); }

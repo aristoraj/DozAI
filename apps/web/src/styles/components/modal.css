@@ -1,0 +1,20 @@
+/* Dialogs: backdrop, header, stepper, body, and the form grid and field layout. */
+.modal-backdrop { position: fixed; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(26,26,26,.35); backdrop-filter: blur(4px); z-index: 100; }
+.modal { width: min(760px,100%); max-height: 92vh; overflow: auto; background: var(--surface-2); border-radius: 25px; box-shadow: var(--shadow); }
+.modal-head { padding: 20px 22px; border-bottom: 1px solid var(--line); display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; }
+.modal-head h2 { margin: 0 0 5px; }
+.modal-head p { margin: 0; color: var(--muted); font-size: var(--fs-sm); }
+.stepper { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; padding: 16px 22px 0; }
+button.stepper-item { padding: 0; border: 0; background: transparent; text-align: left; cursor: pointer; }
+.stepper-item { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: var(--fs-xs); }
+.stepper-item:not(:last-child)::after { content: ""; flex: 1; min-width: 10px; height: 1px; margin-right: 8px; background: var(--line); }
+.stepper-number { width: 19px; height: 19px; border-radius: 50%; display: grid; place-items: center; background: var(--surface); font-size: var(--fs-xs); z-index: 1; }
+.stepper-item.active { color: var(--ink); font-weight: 800; }
+.stepper-item.active .stepper-number, .stepper-item.complete .stepper-number { background: var(--teal-dark); color: white; }
+.modal-body { padding: 22px; }
+.form-grid { display: grid; grid-template-columns: repeat(2,1fr); gap: 13px; }
+.field { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; align-content: start; min-width: 0; } /* so a short field beside a tall one does not stretch its input */
+.field.full { grid-column: 1 / -1; }
+.field label { color: var(--ink); font-size: var(--fs-sm); font-weight: 800; }
+.field input, .field textarea { width: 100%; }
+.field small { color: var(--muted); font-size: var(--fs-xs); }

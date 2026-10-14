@@ -1,0 +1,25 @@
+/* Mission page: the hero card and the workflow rail. */
+.mission-hero { padding: 24px; position: relative; overflow: hidden; }
+.mission-hero::after { content: ""; position: absolute; width: 260px; height: 260px; border: 56px solid rgba(142,207,202,.16); border-radius: 50%; right: -80px; top: -105px; }
+.mission-meta { display: flex; align-items: center; gap: 10px; margin-bottom: 17px; position: relative; z-index: 1; }
+.mission-icon { width: 45px; height: 45px; display: grid; place-items: center; background: var(--coral); border-radius: 14px; color: #4f2b20; font-size: var(--fs-xl); font-weight: 800; }
+.mission-meta h2 { margin: 0 0 4px; font-size: var(--fs-xl); }
+.mission-meta p { margin: 0; color: var(--muted); font-size: var(--fs-sm); }
+.mission-actions { display: flex; gap: 9px; position: relative; z-index: 1; }
+.mission-stats { display: grid; grid-template-columns: repeat(4,1fr); border-top: 1px solid var(--line); margin-top: 21px; padding-top: 18px; position: relative; z-index: 1; }
+.mission-stat { padding: 0 13px; border-right: 1px solid var(--line); }
+.mission-stat:first-child { padding-left: 0; }
+.mission-stat:last-child { border: 0; }
+.mission-stat strong, .mission-stat small { display: block; }
+.mission-stat strong { color: var(--ink); font-size: var(--fs-xl); }
+.mission-stat small { color: var(--muted); font-size: var(--fs-xs); margin-top: 4px; }
+
+.workflow-rail { display: grid; grid-template-columns: repeat(6,1fr); margin-top: 17px; }
+.workflow-step { position: relative; padding: 36px 9px 10px; text-align: center; }
+.workflow-step:not(:last-child)::after { content: ""; position: absolute; top: 14px; left: calc(50% + 14px); right: calc(-50% + 14px); height: 2px; background: var(--line); }
+.workflow-step.complete:not(:last-child)::after { background: var(--teal); }
+.workflow-node { position: absolute; top: 0; left: 50%; transform: translateX(-50%); width: 29px; height: 29px; border-radius: 50%; border: 2px solid var(--line); background: var(--surface-2); display: grid; place-items: center; color: var(--muted); font-size: var(--fs-xs); font-weight: 800; z-index: 1; }
+.workflow-step.complete .workflow-node { border-color: var(--teal-dark); background: var(--teal-dark); color: var(--white); }
+.workflow-step.current .workflow-node { border-color: var(--coral); background: var(--coral-soft); color: var(--coral-dark); box-shadow: 0 0 0 5px rgba(232,150,122,.12); }
+.workflow-step strong { display: block; font-size: var(--fs-sm); color: var(--ink); }
+.workflow-step small { display: block; font-size: var(--fs-xs); color: var(--muted); line-height: 1.35; margin-top: 4px; }

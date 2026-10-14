@@ -1,0 +1,24 @@
+/* Loading: the spinner, the top bar, and the held button. */
+/* ---- loading (busy.js): one spinner, one bar, one rule for every button ---- */
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes busyIn { to { width: 14px; margin-right: 0; opacity: 1; } }
+@keyframes busyPulse { 50% { opacity: .35; } }
+.spinner { display: inline-block; flex: none; box-sizing: border-box; width: 14px; height: 14px; border: 2px solid var(--line); border-top-color: var(--teal-dark); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; }
+.loading-line { display: flex; align-items: center; gap: 8px; margin: 0; }
+.loading-state { display: grid; justify-items: center; gap: 8px; }
+.loading-state .spinner { width: 22px; height: 22px; border-width: 3px; }
+/* A held button: guarded at once, spinner after a short delay so quick actions do not flash. */
+.button.is-busy { pointer-events: none; cursor: progress; }
+.button.is-busy:disabled { opacity: 1; }
+.button.is-busy::before { content: ""; flex: none; box-sizing: border-box; width: 0; height: 14px; margin-right: -7px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; opacity: 0; animation: busyIn .15s ease .25s forwards, spin .8s linear .25s infinite; }
+.top-progress { position: fixed; inset: 0 0 auto 0; z-index: 2000; height: 3px; pointer-events: none; }
+.top-progress[hidden] { display: none; }
+.top-progress::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 35%; background: var(--teal-dark); animation: studioSlide 1.3s ease-in-out infinite; }
+.top-progress-hint { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); padding: 7px 14px; border-radius: 999px; background: var(--ink); color: var(--white); font-size: var(--fs-sm); font-weight: 600; white-space: nowrap; }
+.top-progress-hint[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation: busyPulse 1.4s ease-in-out infinite; border-top-color: var(--teal-dark); }
+  .button.is-busy::before { animation: busyIn .01s linear .25s forwards, busyPulse 1.4s ease-in-out .25s infinite; }
+  .top-progress::before { animation: none; width: 100%; opacity: .5; }
+}
+@media (max-width: 720px) { .top-progress-hint { top: 78px; max-width: calc(100vw - 32px); white-space: normal; text-align: center; } }

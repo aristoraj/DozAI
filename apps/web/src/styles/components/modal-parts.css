@@ -1,0 +1,21 @@
+/* Pieces used inside dialogs: module list, toggles, policy cards, launch summary and the dialog footer. */
+.module-list { display: grid; gap: 8px; }
+.module-row { display: grid; grid-template-columns: 29px 1fr auto; align-items: center; gap: 10px; padding: 11px; border: 1px solid var(--line); border-radius: 12px; }
+.drag-handle { color: #b6aaa2; text-align: center; }
+.module-row strong, .module-row small { display: block; }
+.module-row strong { color: var(--ink); font-size: var(--fs-sm); }
+.module-row small { color: var(--muted); font-size: var(--fs-xs); margin-top: 3px; }
+.toggle { flex: none; width: 34px; height: 19px; border: 0; border-radius: 999px; background: #cec4bd; padding: 2px; cursor: pointer; }
+.toggle::before { content: ""; display: block; width: 15px; height: 15px; border-radius: 50%; background: white; transition: .15s; }
+.toggle.on { background: var(--teal-dark); }
+.toggle.on::before { transform: translateX(15px); }
+.policy-grid { display: grid; grid-template-columns: repeat(2,1fr); gap: 10px; }
+.policy-card { padding: 13px; border: 1px solid var(--line); border-radius: 13px; }
+.policy-card strong { display: block; color: var(--ink); font-size: var(--fs-sm); }
+.policy-card p { color: var(--muted); font-size: var(--fs-sm); line-height: 1.45; margin: 5px 0 9px; }
+.launch-summary { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; }
+.launch-box { padding: 14px; border-radius: 13px; background: var(--surface); }
+.launch-box small, .launch-box strong { display: block; }
+.launch-box small { color: var(--muted); font-size: var(--fs-xs); }
+.launch-box strong { color: var(--ink); margin-top: 5px; font-size: var(--fs-sm); }
+.modal-foot { display: flex; justify-content: space-between; gap: 12px; padding: 15px 22px 20px; border-top: 1px solid var(--line); }

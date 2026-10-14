@@ -1,0 +1,10 @@
+/* Status pills. */
+.status { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 5px 8px; font-size: var(--fs-xs); font-weight: 800; white-space: nowrap; text-transform: uppercase; letter-spacing: var(--ls-caps); }
+.status::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.status.active, .status.confirmed { color: var(--teal-dark); background: var(--teal-soft); }
+.status.review { color: var(--coral-dark); background: var(--coral-soft); }
+.status.progress { color: #80601e; background: #fff1d9; }
+.status.not-confirmed { color: var(--red); background: #fae6e3; }
+.status.inconclusive { color: #70655f; background: #eee7e2; }
+.status.not-started { color: #70655f; background: #eee7e2; }
+.status.opted-out { color: #69627f; background: #eeebf7; }

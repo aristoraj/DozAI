@@ -1,0 +1,39 @@
+/* Question editor: one card per question, WhatsApp and phone side by side. */
+/* ---- the question editor (questions.js): one card per question, WhatsApp and phone side by side ---- */
+.q-editor { display: grid; gap: 12px; }
+.q-list { display: grid; gap: 12px; }
+.q-card { border: 1px solid var(--line); border-radius: 14px; background: var(--white); padding: 14px; display: grid; gap: 12px; min-width: 0; }
+.q-card.editing { border-color: var(--teal-dark); box-shadow: 0 0 0 3px rgba(44, 119, 113, 0.12); }
+.q-head { display: flex; align-items: flex-start; gap: 12px; min-width: 0; flex-wrap: wrap; }
+.q-num { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 9px; background: var(--teal-soft); color: var(--teal-dark); font-size: var(--fs-sm); font-weight: 800; }
+.q-meta { flex: 1 1 180px; min-width: 0; display: grid; gap: 2px; }
+.q-meta strong { color: var(--ink); font-size: var(--fs-sm); font-weight: 700; }
+.q-meta small { color: var(--muted); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.q-meta code { font-size: var(--fs-xs); }
+.q-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+.q-sure { color: var(--ink); font-size: var(--fs-sm); font-weight: 700; }
+.q-channels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.q-channel { min-width: 0; padding: 11px 12px; border-radius: 11px; background: var(--surface); }
+.q-channel h4 { display: flex; align-items: center; gap: 7px; margin: 0 0 6px; color: var(--muted); font-size: var(--fs-xs); font-weight: 800; text-transform: uppercase; letter-spacing: var(--ls-caps); }
+.q-channel h4 em { margin-left: auto; font-style: normal; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--teal-dark); }
+.q-channel p { margin: 0; color: var(--ink); font-size: var(--fs-md); line-height: 1.5; overflow-wrap: anywhere; }
+.q-dot { width: 8px; height: 8px; border-radius: 50%; }
+.q-dot.wa { background: var(--teal-dark); }
+.q-dot.ph { background: var(--coral-dark); }
+.q-opts { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }
+.q-opts li { display: flex; gap: 8px; align-items: baseline; color: var(--body); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.q-opts li span { flex: none; display: inline-grid; place-items: center; min-width: 18px; height: 18px; border-radius: 6px; background: var(--white); border: 1px solid var(--line); color: var(--muted); font-size: var(--fs-xs); font-weight: 700; }
+.q-form { display: grid; gap: 14px; }
+.q-form textarea { width: 100%; resize: none; }
+.q-legend { color: var(--ink); font-size: var(--fs-sm); font-weight: 800; }
+.q-legend small { margin-left: 6px; color: var(--muted); font-weight: 400; }
+.q-opt-input { width: 100%; }
+.q-check { display: flex; align-items: center; gap: 10px; color: var(--ink); font-size: var(--fs-sm); cursor: pointer; }
+.q-warn { margin: 0; padding: 9px 12px; border-radius: 10px; background: #fae6e3; color: var(--red); font-size: var(--fs-sm); line-height: 1.5; }
+.q-form-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.q-problems { padding: 12px 14px; border-radius: 12px; background: #fae6e3; color: var(--red); font-size: var(--fs-sm); line-height: 1.5; }
+.q-problems ul { margin: 6px 0 0; padding-left: 20px; }
+.q-ok { margin: 0; color: var(--teal-dark); font-size: var(--fs-sm); font-weight: 600; }
+.q-add-button { justify-self: start; }
+.q-add { border-style: dashed; }
+@media (max-width: 720px) { .q-channels { grid-template-columns: minmax(0, 1fr); } .q-actions { margin-left: 0; width: 100%; } }

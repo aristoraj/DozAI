@@ -1,0 +1,25 @@
+/* Data tables, search box, participant cells, confidence bars and the empty state. */
+.table-card { overflow: hidden; }
+.table-toolbar { padding: 15px 17px; display: flex; justify-content: space-between; align-items: center; gap: 12px; border-bottom: 1px solid var(--line); }
+.filters { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }
+.search-box { position: relative; }
+.search-box input { width: 220px; padding: 9px 11px 9px 31px; background: var(--surface-2); font-size: var(--fs-sm); }
+.search-box::before { content: "⌕"; position: absolute; left: 11px; top: 7px; color: var(--muted); }
+.data-table { width: 100%; border-collapse: collapse; }
+.data-table th { padding: 10px 15px; background: var(--surface); color: var(--muted); font-size: var(--fs-xs); text-align: left; text-transform: uppercase; letter-spacing: var(--ls-caps); }
+.config-section .data-table { min-width: 440px; } /* a small card scrolls sideways instead of squeezing the words one to a line */
+.data-table th { white-space: nowrap; }
+.data-table td { padding: 13px 15px; border-top: 1px solid #f0e7e0; font-size: var(--fs-sm); vertical-align: middle; }
+.data-table tbody tr { cursor: pointer; transition: .14s; }
+.data-table tbody tr:hover { background: #fff8f3; }
+.participant-cell { display: flex; align-items: center; gap: 9px; }
+.mini-avatar { width: 31px; height: 31px; border-radius: 10px; display: grid; place-items: center; color: #4e2e25; font-size: var(--fs-xs); font-weight: 800; flex: none; }
+.participant-cell strong, .participant-cell small { display: block; }
+.participant-cell strong { color: var(--ink); font-size: var(--fs-sm); }
+.participant-cell small { color: var(--muted); font-size: var(--fs-xs); margin-top: 3px; }
+.confidence { display: flex; align-items: center; gap: 7px; }
+.confidence-bar { width: 48px; height: 5px; background: var(--surface); border-radius: 999px; overflow: hidden; }
+.confidence-bar span { display: block; height: 100%; background: var(--teal-dark); border-radius: inherit; }
+.row-action { width: 27px; height: 27px; border: 0; background: transparent; border-radius: 8px; cursor: pointer; }
+.row-action:hover { background: var(--surface); }
+.empty-state { padding: 50px 20px; text-align: center; color: var(--muted); }

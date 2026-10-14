@@ -8,7 +8,7 @@
 //  - Requests marked silent (the refreshes that run by themselves, and the live check of the questions) show nothing.
 //
 // The delays are constants here so one place decides how the whole app feels.
-export const SPINNER_AFTER_MS = 250;   // the CSS shows the button spinner after this long (see .is-busy in styles.css)
+export const SPINNER_AFTER_MS = 250;   // the CSS shows the button spinner after this long (see .is-busy in styles/components/loading.css)
 export const BAR_AFTER_MS = 350;       // the top bar appears if the work takes longer than this
 export const HINT_AFTER_MS = 6000;     // and says it is still working after this long
 export const IDLE_MS = 150;            // work that follows work (save, then reload the page) counts as one piece of work

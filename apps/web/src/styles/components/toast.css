@@ -1,0 +1,7 @@
+/* Toast messages. */
+.toast-region { position: fixed; right: 20px; bottom: 20px; z-index: 120; display: grid; gap: 8px; }
+.toast { min-width: 270px; max-width: 360px; padding: 12px 14px; border-radius: 13px; color: white; background: var(--ink); box-shadow: var(--shadow); display: grid; grid-template-columns: 24px 1fr; gap: 9px; align-items: center; animation: toastIn .25s ease both; font-size: var(--fs-sm); }
+.toast.success { background: var(--teal-dark); }
+.toast.warning { background: var(--coral-dark); }
+.toast-icon { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 8px; background: rgba(255,255,255,.15); }
+@keyframes toastIn { from { opacity: 0; transform: translateY(10px); } }

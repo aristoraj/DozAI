@@ -1,0 +1,36 @@
+/* Command centre: progress bars, stage rows, the donut and legend, the needs-attention list and the timeline. */
+.progress-track { height: 8px; border-radius: 999px; background: var(--surface); overflow: hidden; }
+.progress-fill { height: 100%; border-radius: inherit; background: var(--teal-dark); }
+.stage-list { display: grid; gap: 13px; }
+.stage-row { display: grid; grid-template-columns: 112px 1fr 30px; gap: 12px; align-items: center; font-size: var(--fs-sm); }
+.stage-row strong { color: var(--ink); font-size: var(--fs-sm); }
+.stage-row > span:last-child { text-align: right; color: var(--muted); font-weight: 700; }
+
+.donut-wrap { display: grid; grid-template-columns: 126px 1fr; gap: 20px; align-items: center; }
+.donut { width: 126px; aspect-ratio: 1; border-radius: 50%; background: conic-gradient(var(--teal-dark) 0 43%, var(--coral) 43% 68%, #e5aa57 68% 84%, #b8aaa2 84% 100%); display: grid; place-items: center; }
+.donut::after { content: ""; width: 76px; aspect-ratio: 1; background: var(--surface-2); border-radius: 50%; }
+.donut-centre { position: absolute; text-align: center; color: var(--ink); }
+.donut-centre strong { display: block; font-size: var(--fs-xl); }
+.donut-centre small { font-size: var(--fs-xs); color: var(--muted); }
+.donut-holder { position: relative; display: grid; place-items: center; }
+.legend { display: grid; gap: 10px; }
+.legend-item { display: grid; grid-template-columns: 8px 1fr auto; gap: 8px; align-items: center; font-size: var(--fs-sm); color: var(--muted); }
+.legend-item strong { color: var(--ink); font-size: var(--fs-sm); }
+.legend-dot { width: 8px; height: 8px; border-radius: 3px; }
+
+.attention-list { display: grid; gap: 10px; }
+.attention-item { display: grid; grid-template-columns: 33px 1fr auto; align-items: center; gap: 10px; padding: 11px; border-radius: 13px; background: var(--surface); }
+.attention-icon { width: 33px; height: 33px; border-radius: 10px; display: grid; place-items: center; background: var(--white); color: var(--coral-dark); font-weight: 800; }
+.attention-item strong, .attention-item small { display: block; }
+.attention-item strong { color: var(--ink); font-size: var(--fs-sm); }
+.attention-item small { color: var(--muted); font-size: var(--fs-xs); margin-top: 3px; }
+.attention-item > span:last-child { color: var(--muted); font-size: var(--fs-md); }
+
+.timeline { display: grid; }
+.timeline-event { display: grid; grid-template-columns: 28px 1fr auto; gap: 10px; min-height: 62px; position: relative; }
+.timeline-event:not(:last-child)::before { content: ""; position: absolute; left: 13px; top: 29px; bottom: 0; width: 1px; background: var(--line); }
+.event-dot { width: 28px; height: 28px; border-radius: 9px; display: grid; place-items: center; background: var(--teal-soft); color: var(--teal-dark); font-size: var(--fs-sm); font-weight: 800; z-index: 1; }
+.event-dot.coral { background: var(--coral-soft); color: var(--coral-dark); }
+.event-copy strong { display: block; color: var(--ink); font-size: var(--fs-sm); }
+.event-copy small { display: block; color: var(--muted); font-size: var(--fs-xs); line-height: 1.4; margin-top: 3px; }
+.event-time { color: var(--muted); font-size: var(--fs-xs); white-space: nowrap; }

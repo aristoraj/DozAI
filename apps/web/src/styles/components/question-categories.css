@@ -1,0 +1,8 @@
+/* Question categories and the read-only phone wording. */
+/* ---- categories and the read-only phone wording (questions.js) ---- */
+.q-group { display: grid; gap: 10px; }
+.q-group + .q-group { margin-top: 6px; }
+.q-group-title { display: flex; align-items: center; gap: 8px; margin: 6px 0 0; color: var(--ink); font-size: var(--fs-md); font-weight: 800; }
+.q-group-title span { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--teal-soft); color: var(--teal-dark); font-size: var(--fs-xs); font-weight: 800; }
+.q-fixed { margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--surface); color: var(--body); font-size: var(--fs-md); line-height: 1.5; overflow-wrap: anywhere; }
+.q-fixed-note { margin: 0; color: var(--muted); font-size: var(--fs-sm); }

@@ -1,0 +1,65 @@
+/* Smaller-screen rules for everything above (1180px, 900px and 680px). */
+@media (max-width: 1180px) {
+  .grid.kpis { grid-template-columns: repeat(2,1fr); }
+  .monitor-kpis { grid-template-columns: repeat(3,1fr); }
+  .session-grid { grid-template-columns: 220px minmax(0,1fr); }
+  .session-grid .inspector { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--line); }
+  .inspector-body { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; }
+  .inspector-field { border-top: 0; }
+  .journey-layout { grid-template-columns: 1fr 1fr; }
+  .journey-layout > :last-child { grid-column: 1 / -1; }
+  .state-stack { grid-template-columns: repeat(3,1fr); }
+}
+@media (max-width: 900px) {
+  :root { --sidebar: 230px; }
+  .sidebar { transform: translateX(-105%); transition: transform .24s ease; box-shadow: var(--shadow); }
+  .sidebar.open { transform: none; }
+  .main-shell { grid-column: 1 / -1; }
+  .mobile-menu { display: block; }
+  .topbar { padding: 0 20px; }
+  .view-container { padding: 25px 20px 40px; }
+  .grid.two, .grid.two-even { grid-template-columns: 1fr; }
+  .agent-layout, .monitor-grid { grid-template-columns: 1fr; }
+  .review-layout { grid-template-columns: 260px minmax(0,1fr); }
+  .role-switcher span { display: none; }
+}
+@media (max-width: 680px) {
+  .topbar { height: 64px; }
+  .context-label { display: none; }
+  .context-select button { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .icon-button.has-alert { display: none; }
+  .role-switcher { padding-left: 5px; }
+  .page-head { align-items: flex-start; flex-direction: column; }
+  .page-actions { justify-content: flex-start; }
+  .page-head > * { min-width: 0; max-width: 100%; }
+  .page-actions .cs-compact { max-width: 100%; }
+  .agent-layout > * { min-width: 0; }
+  .config-section { overflow-x: auto; }
+  .grid.kpis { grid-template-columns: 1fr; }
+  .monitor-kpis { grid-template-columns: repeat(2,1fr); }
+  .data-map, .tool-registry { grid-template-columns: 1fr; }
+  .boundary-callout { grid-template-columns: 1fr; }
+  .boundary-arrow { transform: rotate(90deg); }
+  .agent-banner { align-items: flex-start; flex-direction: column; }
+  .session-grid { grid-template-columns: 1fr; }
+  .trace-sidebar { border-right: 0; border-bottom: 1px solid var(--line); }
+  .inspector-body { grid-template-columns: repeat(2,1fr); }
+  .mission-stats { grid-template-columns: repeat(2,1fr); gap: 14px; }
+  .mission-stat:nth-child(2) { border: 0; }
+  .workflow-rail { grid-template-columns: repeat(3,1fr); row-gap: 18px; }
+  .workflow-step:nth-child(3)::after { display: none; }
+  .review-layout { grid-template-columns: 1fr; }
+  .review-list { border-right: 0; border-bottom: 1px solid var(--line); max-height: 230px; overflow: auto; }
+  .evidence-grid, .form-grid, .policy-grid, .launch-summary { grid-template-columns: 1fr; }
+  .field.full { grid-column: auto; }
+  .modal-backdrop { padding: 8px; }
+  .journey-layout { grid-template-columns: 1fr; }
+  .journey-layout > :last-child { grid-column: auto; }
+  .state-stack { grid-template-columns: 1fr; }
+  .table-card { overflow-x: auto; }
+  .table-toolbar { align-items: stretch; flex-direction: column; }
+  .search-box input { width: 100%; }
+  .audit-row { grid-template-columns: 80px 30px 1fr; }
+  .audit-row > :nth-child(4), .audit-row > :nth-child(5) { display: none; }
+  .stepper-item span:last-child { display: none; }
+}

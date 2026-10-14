@@ -1,0 +1,10 @@
+/* Small text helpers (sizes, muted, mono) for markup built in the scripts. */
+/* Text helpers for markup built in main.js. They use the type scale and win over component rules, as inline styles used to. */
+.t-xs { font-size: var(--fs-xs) !important; }
+.t-sm { font-size: var(--fs-sm) !important; }
+.t-md { font-size: var(--fs-md) !important; }
+.t-lg { font-size: var(--fs-lg) !important; }
+.t-regular { font-weight: 400 !important; }
+.muted { color: var(--muted); }
+.danger-text { color: var(--red); }
+.mono { font-family: ui-monospace, Menlo, Consolas, monospace; line-height: 1.5; }
