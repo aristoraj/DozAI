@@ -63,9 +63,20 @@ export class ConversationRunner {
     const q = questionById(ins, st.current) ?? null;
     const known = st.answers.flatMap(a => { const k = questionById(ins, a.question_id)?.evidence_key; return k ? [{ key: k, value: a.value }] : []; });
     const recent = st.answers.slice(-3).map(a => ({ question: questionById(ins, a.question_id)?.text ?? a.question_id, answer: a.label ?? a.value }));
-    const cls = await this.deps.classifier.classify({ text, question: q, context, instrument: ins, mission: await this.missionContext(c), known, recent });
+    const cls = await this.deps.classifier.classify({ text, question: q, context, instrument: ins, mission: await this.missionContext(c), known, recent, names: [person.display_name, person.first_name ?? ""] });
     await svc.emit(c, "reply_handled", "conversation-runner", `Reply understood as: ${cls.intent}`, { intent: cls.intent, confidence: cls.confidence, question: q?.id ?? null });
 
+    try {
+      return await this.act(c, st, ins, q, context, cls, text, person.consent);
+    } catch (e) {
+      // The message limit stops the reply, so a person must take over: otherwise the case sits mid-interview with nobody told.
+      if (e instanceof DozaiError && e.code === "MESSAGE_CAP" && st.status !== "escalated") await this.escalate(c, st, ins, "message_limit", "The message limit for this conversation was reached before it finished.");
+      throw e;
+    }
+  }
+
+  private async act(c: CaseRecord, st: ConversationState, ins: Instrument, q: Question | null, context: "consent" | "question", cls: Classification, text: string, consent: string): Promise<ReplyResult> {
+    const svc = this.svc, tenant = c.tenant_id, caseId = c.case_id;
     switch (cls.intent) {
       case "stop": {
         await svc.recordInbound(tenant, caseId, { provider_event_id: `conv-stop-${newId("s")}`, channel: "whatsapp", summary: "Participant asked to stop", opt_out: true });
@@ -83,7 +94,7 @@ export class ConversationRunner {
       case "clarify": return this.reask(c, st, ins, q, context, false, "clarify");
       case "off_topic":
       case "unclear": return this.reask(c, st, ins, q, context, text.trim() === "");
-      case "answer": return context === "consent" ? this.begin(c, st, ins, person.consent) : this.apply(c, st, ins, q!, cls);
+      case "answer": return context === "consent" ? this.begin(c, st, ins, consent) : this.apply(c, st, ins, q!, cls);
     }
   }
 

@@ -1,7 +1,7 @@
 // Storage port. The Catalyst Data Store implementation must satisfy the same contract;
 // casCase MUST be atomic on `version` (see ARCHITECTURE.md, spike 1).
 import type { Campaign, CaseEvent, CaseRecord, ConversationState, Decision, Evidence, Participant } from "@dozai/contracts";
-import type { EmployeeDefinition } from "./employee";
+import type { EmployeeDefinition, PlatformDefinition } from "./employee";
 import type { MissionBundle } from "./mission";
 import type { CallRecord, VoiceFormLink } from "./voice";
 import type { Controls } from "./controls";
@@ -69,6 +69,10 @@ export interface Store {
   putEmployee(e: EmployeeDefinition): Promise<boolean>;
   getEmployee(version: string): Promise<EmployeeDefinition | undefined>;
   listEmployees(): Promise<EmployeeDefinition[]>;
+  /** The platform layer (rules every employee works under): immutable versions, shared by every client. Returns false when this version already exists. */
+  putPlatform(p: PlatformDefinition): Promise<boolean>;
+  getPlatform(version: string): Promise<PlatformDefinition | undefined>;
+  listPlatform(): Promise<PlatformDefinition[]>;
   /** Which phone form a mission was published as. Changes when the form is re-published. */
   putVoiceForm(l: VoiceFormLink): Promise<void>;
   getVoiceForm(tenant: string, missionVersion: string): Promise<VoiceFormLink | undefined>;
@@ -78,6 +82,8 @@ export interface Store {
   listCalls(tenant: string, caseId?: string): Promise<CallRecord[]>;
   /** Campaigns change status and counters, so this keeps only the latest version. */
   putCampaign(c: Campaign): Promise<void>;
+  /** Writes `next` only if the stored campaign is still exactly `read`. False means someone changed it since: read again and retry. */
+  putCampaignIf(next: Campaign, read: Campaign): Promise<boolean>;
   getCampaign(tenant: string, id: string): Promise<Campaign | undefined>;
   listCampaigns(tenant: string): Promise<Campaign[]>;
   /** Operating controls: autonomy, kill switch, spend limits. One current document per client; every change is kept. */
@@ -94,6 +100,15 @@ export interface Store {
   putSecret(name: string, value: string): Promise<void>;
 }
 
+/** One Data Store row holds at most this many characters of JSON (see DocStore). The in-memory store refuses the same records, so a
+ *  record that would fail on Catalyst fails in tests too. Missions, employees and session traces are split over rows, so they are exempt. */
+export const MAX_DOC_CHARS = 9000;
+const fit = <T>(kind: string, id: string, value: T): T => {
+  const n = JSON.stringify(value).length;
+  if (n > MAX_DOC_CHARS) throw new Error(`document too large for ${kind}/${id}: ${n} chars`);
+  return value;
+};
+
 export class InMemoryStore implements Store {
   private cases = new Map<string, CaseRecord>();
   private participants = new Map<string, Participant>();
@@ -108,6 +123,7 @@ export class InMemoryStore implements Store {
   private convs = new Map<string, ConversationState>();
   private missions = new Map<string, MissionBundle>();
   private employees = new Map<string, EmployeeDefinition>();
+  private platform = new Map<string, PlatformDefinition>();
   private voiceForms = new Map<string, VoiceFormLink>();
   private calls = new Map<string, CallRecord>();
   private campaigns = new Map<string, Campaign>();
@@ -129,16 +145,17 @@ export class InMemoryStore implements Store {
     const key = this.k(next.tenant_id, next.case_id);
     const cur = this.cases.get(key);
     if (next.version !== expectedVersion + 1) throw new Error("casCase: version must advance by exactly one");
+    fit("case", next.case_id, next);
     if ((cur?.version ?? 0) !== expectedVersion) return false;
     this.cases.set(key, structuredClone(next));
     return true;
   }
   async getParticipant(t: string, id: string) { const p = this.participants.get(this.k(t, id)); return p && structuredClone(p); }
   async listParticipants(t: string) { return [...this.participants.values()].filter(p => p.tenant_id === t).map(p => structuredClone(p)); }
-  async putParticipant(p: Participant) { this.participants.set(this.k(p.tenant_id, p.participant_id), structuredClone(p)); }
+  async putParticipant(p: Participant) { this.participants.set(this.k(p.tenant_id, p.participant_id), structuredClone(fit("participant", p.participant_id, p))); }
   async appendEvent(ev: CaseEvent) {
     if (this.events.some(e => e.tenant_id === ev.tenant_id && e.case_id === ev.case_id && e.seq === ev.seq)) throw new Error("ledger: duplicate seq");
-    this.events.push(structuredClone(ev));
+    this.events.push(structuredClone(fit("event", ev.event_id, ev)));
   }
   async lastEvent(t: string, caseId: string) {
     let last: CaseEvent | undefined;
@@ -151,18 +168,18 @@ export class InMemoryStore implements Store {
       .sort((a, b) => (a.case_id === b.case_id ? a.seq - b.seq : a.ts.localeCompare(b.ts)))
       .map(e => structuredClone(e));
   }
-  async addEvidence(e: Evidence) { this.evidence.push(structuredClone(e)); }
-  async listEvidence(caseId: string) { return this.evidence.filter(e => e.case_id === caseId).map(e => structuredClone(e)); }
+  async addEvidence(e: Evidence) { this.evidence.push(structuredClone(fit("evidence", e.evidence_id, e))); }
+  async listEvidence(caseId: string) { return this.evidence.filter(e => e.case_id === caseId).map(e => structuredClone(e)).sort((a, b) => (a.at ?? "").localeCompare(b.at ?? "")); } // oldest first; ties keep their order
   async listAllEvidence() { return this.evidence.map(e => structuredClone(e)); }
-  async addDecision(d: Decision) { this.decisions.push(structuredClone(d)); }
+  async addDecision(d: Decision) { this.decisions.push(structuredClone(fit("decision", d.decision_id, d))); }
   async listDecisions(caseId: string) { return this.decisions.filter(d => d.case_id === caseId).map(d => structuredClone(d)); }
-  async putReviewTask(t: ReviewTask) { this.tasks.set(t.task_id, structuredClone(t)); }
+  async putReviewTask(t: ReviewTask) { this.tasks.set(t.task_id, structuredClone(fit("task", t.task_id, t))); }
   async listReviewTasks(t: string) { return [...this.tasks.values()].filter(x => x.tenant_id === t).map(x => structuredClone(x)); }
-  async putOutbox(o: OutboxItem) { this.outbox.set(o.outbox_id, structuredClone(o)); }
+  async putOutbox(o: OutboxItem) { this.outbox.set(o.outbox_id, structuredClone(fit("outbox", o.outbox_id, o))); }
   async listOutbox(t: string) { return [...this.outbox.values()].filter(x => x.tenant_id === t).map(x => structuredClone(x)); }
   async getConversation(t: string, id: string) { const c = this.convs.get(this.k(t, id)); return c && structuredClone(c); }
-  async putConversation(c: ConversationState) { this.convs.set(this.k(c.tenant_id, c.case_id), structuredClone(c)); }
-  async putInbox(e: InboxEvent) { this.inbox.set(this.k(e.tenant_id, e.inbox_id), structuredClone(e)); }
+  async putConversation(c: ConversationState) { this.convs.set(this.k(c.tenant_id, c.case_id), structuredClone(fit("conv", c.case_id, c))); }
+  async putInbox(e: InboxEvent) { this.inbox.set(this.k(e.tenant_id, e.inbox_id), structuredClone(fit("inbox", e.inbox_id, e))); }
   async getInbox(t: string, id: string) { const e = this.inbox.get(this.k(t, id)); return e && structuredClone(e); }
   async listInbox(t: string) { return [...this.inbox.values()].filter(e => e.tenant_id === t).sort((a, b) => a.received_at.localeCompare(b.received_at)).map(e => structuredClone(e)); }
   async eraseCase(a: EraseArgs) {
@@ -193,20 +210,29 @@ export class InMemoryStore implements Store {
   async putEmployee(e: EmployeeDefinition) { if (this.employees.has(e.version)) return false; this.employees.set(e.version, structuredClone(e)); return true; }
   async getEmployee(v: string) { const e = this.employees.get(v); return e && structuredClone(e); }
   async listEmployees() { return [...this.employees.values()].map(e => structuredClone(e)); }
+  async putPlatform(p: PlatformDefinition) { if (this.platform.has(p.version)) return false; this.platform.set(p.version, structuredClone(p)); return true; }
+  async getPlatform(v: string) { const p = this.platform.get(v); return p && structuredClone(p); }
+  async listPlatform() { return [...this.platform.values()].map(p => structuredClone(p)); }
   async putVoiceForm(l: VoiceFormLink) { this.voiceForms.set(this.k(l.tenant_id, l.mission_version), structuredClone(l)); }
   async getVoiceForm(t: string, v: string) { const l = this.voiceForms.get(this.k(t, v)); return l && structuredClone(l); }
-  async putCall(c: CallRecord) { this.calls.set(this.k(c.tenant_id, c.communication_id), structuredClone(c)); }
+  async putCall(c: CallRecord) { this.calls.set(this.k(c.tenant_id, c.communication_id), structuredClone(fit("call", c.communication_id, c))); }
   async getCall(t: string, id: string) { const c = this.calls.get(this.k(t, id)); return c && structuredClone(c); }
   async listCalls(t: string, caseId?: string) { return [...this.calls.values()].filter(c => c.tenant_id === t && (!caseId || c.case_id === caseId)).map(c => structuredClone(c)); }
-  async putCampaign(c: Campaign) { this.campaigns.set(this.k(c.tenant_id, c.campaign_id), structuredClone(c)); }
+  async putCampaign(c: Campaign) { this.campaigns.set(this.k(c.tenant_id, c.campaign_id), structuredClone(fit("campaign", c.campaign_id, c))); }
+  async putCampaignIf(next: Campaign, read: Campaign) {
+    const k = this.k(next.tenant_id, next.campaign_id);
+    if (JSON.stringify(this.campaigns.get(k)) !== JSON.stringify(read)) return false;
+    this.campaigns.set(k, structuredClone(next));
+    return true;
+  }
   async getCampaign(t: string, id: string) { const c = this.campaigns.get(this.k(t, id)); return c && structuredClone(c); }
   async listCampaigns(t: string) { return [...this.campaigns.values()].filter(c => c.tenant_id === t).map(c => structuredClone(c)); }
   async getControls(t: string) { const c = this.controls.get(t); return c && structuredClone(c); }
   async putControls(c: Controls) { this.controls.set(c.tenant_id, structuredClone(c)); }
-  async putWake(w: WakeRequest) { this.wakes.set(this.k(w.tenant_id, w.wake_id), structuredClone(w)); }
+  async putWake(w: WakeRequest) { this.wakes.set(this.k(w.tenant_id, w.wake_id), structuredClone(fit("wake", w.wake_id, w))); }
   async listWakes(t: string, caseId?: string) { return [...this.wakes.values()].filter(w => w.tenant_id === t && (!caseId || w.case_id === caseId)).sort((a, b) => a.at.localeCompare(b.at)).map(w => structuredClone(w)); }
   async getMemory(t: string, caseId: string) { const m = this.memories.get(this.k(t, caseId)); return m && structuredClone(m); }
-  async putMemory(m: CaseMemory) { this.memories.set(this.k(m.tenant_id, m.case_id), structuredClone(m)); }
+  async putMemory(m: CaseMemory) { this.memories.set(this.k(m.tenant_id, m.case_id), structuredClone(fit("memory", m.case_id, m))); }
   async getSecret(name: string) { return this.secrets.get(name); }
   async putSecret(name: string, value: string) { this.secrets.set(name, value); }
 }

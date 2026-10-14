@@ -52,7 +52,8 @@ export async function replaySession(svc: CaseService, tenant: string, sessionId:
       const mission = await svc.getMission(tenant, s.mission_version);
       const contact = t.tool === "whatsapp_send_template" || t.tool === "voice_call_request";
       if (c.deleted_at) refuse("CASE_DELETED", "the case was deleted");
-      else if (contact && person?.consent === "declined") refuse("CONSENT_DECLINED", "the person has declined or opted out");
+      // A reminder contacts nobody, but the tool still refuses one for someone who declined: replay must say the same.
+      else if ((contact || t.tool === "callback_schedule") && person?.consent === "declined") refuse("CONSENT_DECLINED", "the person has declined or opted out");
       else if (t.tool === "whatsapp_send_template" && !mission.templates.some(x => x.key === input.template_key)) refuse("TEMPLATE_NOT_APPROVED", `template ${String(input.template_key)} is not in the approved list`);
       else if (t.tool === "voice_call_request") {
         if (!svc.voiceEnabled) refuse("NO_PHONE_CHANNEL", "phone calls are not available");

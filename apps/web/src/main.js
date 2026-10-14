@@ -16,7 +16,7 @@ const state = {
   view: "overview", localRole: "admin", dashMission: ALL, caseTab: "overview", caseTabFor: null,
   me: null, mission: null, cases: [], audits: [], summary: null, sessions: [],
   missions: [], defaultMission: null, missionShown: null, campaigns: [],
-  employees: [], employeeCanEdit: false, employeeShown: null, employeeDef: null, ctxPreview: null,
+  employees: [], employeeCanEdit: false, platform: null, platformShown: null, employeeShown: null, employeeDef: null, ctxPreview: null,
   voiceForm: null, voiceFormFor: null, voicePublishing: false, voiceLoading: false, wording: null, wordingFor: null, qeditor: null, wordingLoading: false, wordingFailedFor: null,
   approvals: [], approvalsWaiting: 0, controlsInfo: null, replay: null, voice: null, voiceCheck: null,
   loaded: false, error: null,
@@ -86,8 +86,8 @@ async function loadAll() {
   try {
     // Configuration can change between deploys, so re-read it each time instead of trusting a stale tab.
     [state.me, state.mission] = await Promise.all([api("/me"), api("/mission")]);
-    const [c, a, s, ss, ms, cp, em, ap, co, vo] = await Promise.all([api("/cases"), api("/audit?limit=300"), api("/summary"), api("/sessions"), api("/missions"), api("/campaigns"), api("/employees"), api("/approvals"), api("/controls"), api("/voice")]);
-    Object.assign(state, { cases: c.cases, audits: a.events.map(withIst), summary: s, sessions: ss.sessions, missions: ms.missions, defaultMission: ms.default_version, campaigns: cp.campaigns, employees: em.employees, employeeCanEdit: em.can_edit, approvals: ap.approvals, approvalsWaiting: ap.waiting, controlsInfo: co, voice: vo, error: null, loaded: true });
+    const [c, a, s, ss, ms, cp, em, ap, co, vo, pf] = await Promise.all([api("/cases"), api("/audit?limit=300"), api("/summary"), api("/sessions"), api("/missions"), api("/campaigns"), api("/employees"), api("/approvals"), api("/controls"), api("/voice"), api("/platform")]);
+    Object.assign(state, { cases: c.cases, audits: a.events.map(withIst), summary: s, sessions: ss.sessions, missions: ms.missions, defaultMission: ms.default_version, campaigns: cp.campaigns, employees: em.employees, employeeCanEdit: em.can_edit, approvals: ap.approvals, approvalsWaiting: ap.waiting, controlsInfo: co, voice: vo, platform: pf, error: null, loaded: true });
     if (state.missionShown && !state.missions.some(m => m.version === state.missionShown.version)) state.missionShown = null;
   } catch (e) {
     state.error = e.message; state.loaded = true;
@@ -127,12 +127,18 @@ function pageHead(eyebrow, title, text, actions = "") {
 }
 const empty = (title, text, action = "") => `<div class="empty-state"><h3>${esc(title)}</h3><p>${esc(text)}</p>${action}</div>`;
 
+let lastHtml = "";
+let shownView = null; // the page fades in when it changes, not each time the same page is redrawn after a click
 function render() {
-  if (!state.loaded) { appView.innerHTML = `<div class="view-enter">${loadingState("Loading…", "Reading the latest data.")}</div>`; return; }
-  if (state.error) { appView.innerHTML = `<div class="view-enter">${empty("Could not load data", state.error, `<button class="button primary" data-action="refresh">Try again</button>`)}</div>`; bind(); return; }
+  if (!state.loaded) { shownView = null; lastHtml = ""; appView.innerHTML = `<div class="view-enter">${loadingState("Loading…", "Reading the latest data.")}</div>`; return; }
+  if (state.error) { shownView = null; lastHtml = ""; appView.innerHTML = `<div class="view-enter">${empty("Could not load data", state.error, `<button class="button primary" data-action="refresh">Try again</button>`)}</div>`; bind(); return; }
   const views = { overview: renderOverview, cases: renderCases, campaigns: renderCampaigns, reviews: renderReviews, agent: renderAgent, approvals: renderApprovals, calls: renderCalls, missions: renderMission, audit: renderAudit };
   const off = state.controlsInfo?.controls.paused ? `<div class="agent-callout" style="border-color:#b64b48;margin-bottom:14px"><small>Switched off</small><h3>Nothing is being sent or placed, and the agent is not being woken.</h3><p>Open Claude engine, then Controls, to switch it back on.</p></div>` : "";
-  appView.innerHTML = `<div class="view-enter">${off}${views[state.view]()}</div>`;
+  const enter = shownView === state.view ? "" : "view-enter";
+  const html = `<div class="${enter}">${off}${views[state.view]()}</div>`;
+  if (!enter && html === lastHtml) return; // nothing changed: leave the page alone instead of flashing it
+  shownView = state.view; lastHtml = html;
+  appView.innerHTML = html;
   bind();
   if (state.view === "reviews" && state.reviewSelected && $("reviewConv")) fillConversation("reviewConv", state.reviewSelected);
   // The questions of an unsigned mission open by themselves: reading them is what a sign-off is based on.
@@ -270,6 +276,12 @@ const caseRow = c => `<tr data-case="${esc(c.id)}" style="cursor:pointer"><td><d
 // ---- campaigns -------------------------------------------------------------------------------------------------------------------------------
 const CAMP_STATUS = { draft: ["not-started", "Draft"], running: ["progress", "Running"], paused: ["review", "Paused"], completed: ["confirmed", "Finished"], stopped: ["not-confirmed", "Stopped"] };
 const todayIst = () => new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+/** Employer fields belong to missions that check an answer against the programme's employer record (the placement kind). A mission about
+ *  anything else has no employer, so they are not shown for it. A mission that lists no needs is an older placement one. */
+const hasEmployer = c => {
+  const m = state.missions.find(x => x.version === (c.mission_version ?? state.missions[0]?.version));
+  return !m || !(m.requirements || []).length || m.requirements.some(r => r.checked_against === "programme_employer");
+};
 const missionName = v => { const m = state.missions.find(x => x.version === v); return m ? `${m.name} (${m.version})` : v; };
 
 function renderCampaigns() {
@@ -281,20 +293,31 @@ function renderCampaigns() {
 }
 
 function campaignCard(c) {
-  const p = c.progress || { queued: 0, contacted: 0, waiting: 0, needs_review: 0, complete: 0, send_failed: 0 };
+  const p = c.progress || { queued: 0, contacted: 0, waiting: 0, needs_review: 0, complete: 0, send_failed: 0, in_mission: 0, already_contacted: 0, in_other_campaign: 0 };
   const total = p.queued + p.contacted;
   const pct = total ? Math.round((p.contacted / total) * 100) : 0;
   const [cls, label] = CAMP_STATUS[c.status] || ["not-started", c.status];
   const today = c.sent_day === todayIst() ? c.sent_today : 0;
   const stale = c.status === "running" && c.last_run_at && Date.now() - new Date(c.last_run_at).getTime() > 3 * 60_000;
   const btn = (act, text) => `<button class="button ${act === "start" || act === "resume" ? "primary" : "ghost"} small" data-camp="${esc(c.campaign_id)}" data-act="${act}">${text}</button>`;
-  const controls = !can("intake") ? "" : c.status === "draft" ? btn("start", "Start sending") + btn("stop", "Discard")
-    : c.status === "running" ? btn("pause", "Pause") + btn("stop", "Stop") : c.status === "paused" ? btn("resume", "Resume") + btn("stop", "Stop") : "";
+  const noOne = c.status === "draft" && !p.queued;
+  const startBtn = noOne ? `<button class="button primary small" disabled title="Nobody can be messaged yet">Start sending</button>` : btn("start", "Start sending");
+  const why = [p.already_contacted ? `${p.already_contacted} already contacted` : "", p.in_other_campaign ? `${p.in_other_campaign} in another campaign` : ""].filter(Boolean).join(", ");
+  const scope = c.cohort ? ` in cohort ${esc(c.cohort)}` : "";
+  const reachLine = c.status !== "draft"
+    ? `<p class="muted t-xs" style="margin:10px 0 0">${plural(p.in_mission, "person", "people")} in this mission${scope}.</p>`
+    : noOne
+      ? `<p class="danger-text t-sm" style="margin:10px 0 0">Nobody can be messaged by this campaign. ${p.in_mission ? `This mission has ${plural(p.in_mission, "person", "people")}${scope}, but ${why || "none are waiting to be messaged"}.` : `There is nobody in this mission${scope} yet. Add people on the Cases page first.`}</p>`
+      : `<p class="muted t-sm" style="margin:10px 0 0"><strong>${plural(p.queued, "person", "people")}</strong> will be messaged${p.in_mission > p.queued ? ` (of ${p.in_mission} in this mission${why ? `; ${why}` : ""})` : ""}.</p>`;
+  const del = btn("delete", "Delete");
+  const controls = !can("intake") ? "" : c.status === "draft" ? startBtn + del
+    : c.status === "running" ? btn("pause", "Pause") + btn("stop", "Stop") : c.status === "paused" ? btn("resume", "Resume") + btn("stop", "Stop") + del : del;
   const tile = (l, v, tone = "") => `<div class="summary-box"><small>${l}</small><strong ${tone ? `style="color:${tone}"` : ""}>${v}</strong></div>`;
   return `<section class="card card-pad" style="margin-bottom:14px" data-campaign-card="${esc(c.campaign_id)}">
     <div class="card-head"><div><h2>${esc(c.name)}</h2><p>${esc(missionName(c.mission_version))} · ${c.cohort ? `cohort ${esc(c.cohort)}` : "everyone loaded before it started"} · up to ${c.daily_cap} a day, ${c.per_tick} a minute</p></div><span class="status ${cls}">${label}</span></div>
     <div style="display:flex;align-items:center;gap:10px;margin:6px 0 12px"><div class="progress-track" style="flex:1"><div class="progress-fill" style="width:${pct}%"></div></div><strong class="t-sm">${p.contacted} of ${total} messaged</strong></div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px">${tile("Waiting to send", p.queued)}${tile("Messaged", p.contacted)}${tile("Waiting for reply", p.waiting)}${tile("Needs review", p.needs_review, p.needs_review ? "#b64b48" : "")}${tile("Finished", p.complete)}${tile("Could not send", p.send_failed, p.send_failed ? "#b64b48" : "")}${tile("Sent today", `${today} / ${c.daily_cap}`)}</div>
+    ${reachLine}
     ${c.pause_reason && c.status === "paused" ? `<p class="danger-text t-sm" style="margin:10px 0 0">${esc(c.pause_reason)}</p>` : c.last_note ? `<p class="muted t-sm" style="margin:10px 0 0">${esc(c.last_note)}${c.last_run_at ? ` (${esc(istTime(c.last_run_at))})` : ""}</p>` : ""}
     ${stale ? `<p class="danger-text t-sm" style="margin:6px 0 0">The scheduler has not run for a few minutes, so no new batches are going out. Check that the Cron job is set up, or press "Send next batch now".</p>` : ""}
     ${p.send_failed ? `<p class="muted t-xs" style="margin:6px 0 0">People marked "Could not send" stay in the waiting state. Open their case to see why.</p>` : ""}
@@ -317,11 +340,22 @@ function campaignAct(id, act) {
       onConfirm: () => run(out => `Started. ${plural(out.pass?.sent ?? 0, "first message")} sent now.`),
     });
   }
+  if (act === "delete") {
+    const sent = c.progress?.contacted ?? 0;
+    return confirmModal({
+      title: `Delete "${c.name}"?`,
+      text: sent ? `The campaign is removed from this page. The ${plural(sent, "person", "people")} it messaged keep their cases and conversations, and cannot be added to a new campaign.` : "Nothing was sent by this campaign. It is removed from this page.",
+      button: "Delete campaign", busy: "Deleting…", danger: true,
+      onConfirm: async () => { if (await deleteCampaign(id)) toast("Campaign deleted.", "success"); },
+    });
+  }
   if (act === "stop") {
     return confirmModal({ title: `${c.status === "draft" ? "Discard" : "Stop"} "${c.name}"?`, text: c.status === "draft" ? "Nothing has been sent. The campaign is closed and cannot be started." : "No more first messages will be sent. People already messaged keep their conversations. A stopped campaign cannot be restarted.", button: c.status === "draft" ? "Discard" : "Stop campaign", busy: c.status === "draft" ? "Discarding…" : "Stopping…", danger: true, onConfirm: () => run(() => "Campaign stopped.") });
   }
   run(out => act === "pause" ? "Paused. Nothing more will be sent until you resume." : `Resumed. ${plural(out.pass?.sent ?? 0, "first message")} sent now.`);
 }
+// (campaignAct has a parameter called act, which hides the act() helper inside it, so deleting lives out here.)
+const deleteCampaign = id => act(() => api(`/campaigns/${id}/delete`, { method: "POST" }), null);
 const act_ = (id, a) => act(() => api(`/campaigns/${id}/${a}`, { method: "POST" }), null);
 
 // The dialog stays open while the work runs, with the button saying so ("Signing off…"), and closes when it is done, worked or not.
@@ -376,6 +410,15 @@ function openCampaignModal() {
 }
 
 // ---- add a mission (administrators) -----------------------------------------------------------------------------------------------------
+/** Options for choosing an employee: follow one (its newest version) or pin one exact version. */
+function employeeChoices(selected) {
+  const ids = [...new Set(state.employees.map(e => e.employee_id))];
+  return ids.map(id => {
+    const mine = state.employees.filter(e => e.employee_id === id), cur = mine.at(-1);
+    return `<optgroup label="${esc(cur.name)} (${esc(id)})"><option value="${esc(id)}" ${selected === id ? "selected" : ""}>Follow ${esc(cur.name)}: always the newest version</option>${mine.map(e => `<option value="${esc(id)}|${esc(e.version)}" ${selected === id + "|" + e.version ? "selected" : ""}>Pin ${esc(e.version)}</option>`).join("")}</optgroup>`;
+  }).join("");
+}
+
 function openMissionModal(prefill) {
   const s = { text: prefill ?? "", from: state.missionShown?.version ?? state.defaultMission, error: null, running: false };
   const draw = () => {
@@ -443,7 +486,7 @@ async function openCase(id) {
       </div></div>
     <div class="drawer-tabs" role="tablist" aria-label="Case sections">${TABS.map(([k, label]) => `<button type="button" class="drawer-tab" role="tab" id="tab-${k}" data-tab="${k}" aria-controls="panel-${k}" aria-selected="${k === tab}" tabindex="${k === tab ? 0 : -1}">${label}<span class="tab-count" data-tab-count="${k}" hidden></span></button>`).join("")}</div>
     ${panel("overview", `<div class="drawer-section"><h3>What we need to know</h3><div id="reqBox">${loadingLine()}</div></div>
-      <div class="drawer-section"><h3>Participant</h3><dl class="kv">${kv("Phone", c.phone)}${kv("Programme record employer", c.recorded_employer)}${kv("Reported employer", c.employer)}${kv("Case owner", c.owner)}${kv("Mission", missionName(c.mission_version ?? state.missions[0]?.version))}</dl></div>
+      <div class="drawer-section"><h3>Participant</h3><dl class="kv">${kv("Phone", c.phone)}${hasEmployer(c) ? kv("Programme record employer", c.recorded_employer) + kv("Reported employer", c.employer) : ""}${kv("Case owner", c.owner)}${kv("Mission", missionName(c.mission_version ?? state.missions[0]?.version))}</dl></div>
       ${can("admin") ? `<div class="drawer-section danger-zone"><h3>Danger zone</h3><p class="t-sm muted" style="margin:0 0 10px">Deleting erases this participant's name, number, replies and evidence. The case stays only as an anonymous entry in the audit trail. This cannot be undone.</p><button class="button ghost small" id="deleteCase" style="color:#b64b48;border-color:#b64b48">Delete case…</button></div>` : ""}`)}
     ${panel("conversation", `<div id="convBox">${loadingLine()}</div>${simulated && can("run") && c.stage !== "Complete" ? `<div style="display:flex;gap:8px;margin-top:10px"><input id="simText" placeholder="Type a participant reply (simulated)" class="t-sm" style="flex:1" /><button class="button primary small" id="simSend" data-busy-label="Sending…">Send</button></div><small class="muted t-xs">WhatsApp is off. This goes through the same conversation logic as a real reply.</small>` : ""}`)}
     ${panel("calls", `<div id="callBox">${loadingLine()}</div>`)}
@@ -601,8 +644,8 @@ function reviewDetail(c) {
   return `<div class="review-title"><div><div class="eyebrow">Decision required</div><h2>${esc(c.name)}</h2><p>${esc(c.id)} · ${esc(c.cohort)} · ${esc(c.location)}</p></div>${statusPill(c.status)}</div>
     <div class="evidence-grid">
       <div class="evidence-card"><small>Current reading</small><strong>${esc(c.outcome)}</strong><p>Proposed by the agent.</p></div>
-      <div class="evidence-card flagged"><small>Programme record</small><strong>${esc(c.recorded_employer)}</strong><p>What the programme has on file.</p></div>
-      <div class="evidence-card"><small>Reported employer</small><strong>${esc(c.employer)}</strong><p>From the participant's reply.</p></div>
+      ${hasEmployer(c) ? `<div class="evidence-card flagged"><small>Programme record</small><strong>${esc(c.recorded_employer)}</strong><p>What the programme has on file.</p></div>
+      <div class="evidence-card"><small>Reported employer</small><strong>${esc(c.employer)}</strong><p>From the participant's reply.</p></div>` : ""}
       <div class="evidence-card"><small>Confidence</small><strong>${c.confidence}%</strong><p>Auto-confirm needs ${Math.round(state.mission.policy.auto_confirm_at * 100)}% and no conflict.</p></div></div>
     <div style="margin:14px 0"><h3 class="t-md" style="margin:0 0 6px">Conversation</h3><div id="reviewConv"></div></div>
     <div class="agent-callout"><small>Why this needs a person</small><h3>${esc(c.reason)}</h3><p>The agent's recommendation is not a final decision.</p></div>
@@ -765,10 +808,11 @@ const TOOL_HELP = {
 
 function renderAgent() {
   const tab = state.agentTab;
-  const tabs = [["agent", "Agent"], ["employee", "Employee"], ["controls", "Controls"], ["sessions", "Sessions"]];
+  const tabs = [["agent", "Agent"], ["platform", "Platform"], ["employee", "Employees"], ["controls", "Controls"], ["sessions", "Sessions"]];
   return `${pageHead("Claude engine", "The agent, its limits and what it has done.", "It can only use the tools below. It cannot read the database, see phone numbers, or complete a case on its own.")}
+    ${layerStrip()}
     <div class="agent-tabs" role="tablist">${tabs.map(([id, l]) => `<button class="agent-tab ${tab === id ? "active" : ""}" data-agent-tab="${id}" role="tab">${l}</button>`).join("")}</div>
-    ${tab === "agent" ? renderAgentInfo() : tab === "employee" ? renderEmployee() : tab === "controls" ? renderControls() : renderSessions()}`;
+    ${tab === "agent" ? renderAgentInfo() : tab === "platform" ? renderPlatform() : tab === "employee" ? renderEmployee() : tab === "controls" ? renderControls() : renderSessions()}`;
 }
 function renderAgentInfo() {
   const r = state.mission.runtime;
@@ -825,25 +869,152 @@ function renderEmployee() {
     <select class="filter-select" id="ctxMission" aria-label="Mission">${state.missions.map(m => `<option value="${esc(m.version)}" ${m.version === mission ? "selected" : ""}>${esc(m.name)} · ${esc(m.version)}</option>`).join("")}</select></div>${layers}</section>`;
 }
 
-function openEmployeeModal() {
-  const s = { text: "", error: null, running: false };
+// ---- the three layers: platform, employee, mission ------------------------------------------------------------------------------------
+function layerStrip() {
+  const cur = state.platform?.current_version, e = state.employeeDef || state.employees.find(x => x.current);
+  const m = state.missionShown ?? state.mission;
+  const box = (n, title, line, tab) => `<button type="button" class="summary-box" style="text-align:left;cursor:pointer" ${tab ? `data-agent-tab="${tab}"` : `data-go="missions"`}><small>${n}. ${title}</small><strong>${esc(line)}</strong></button>`;
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;margin:0 0 14px">${box(1, "Platform rules", cur || "PL-1.0.0", "platform")}${box(2, "Employee", e ? `${e.name} · ${e.version}` : "—", "employee")}${box(3, "Mission", m ? m.name : "—", "")}</div>
+    <p class="muted t-xs" style="margin:-4px 0 14px">The agent is told the platform rules first, then the employee, then the mission. Each layer is saved in versions that never change, and each can be edited here or on the Mission page.</p>`;
+}
+
+// ---- the platform layer ---------------------------------------------------------------------------------------------------------------
+function renderPlatform() {
+  const pl = state.platform;
+  if (!pl) return loadingState("Loading the platform rules…", "Reading the current version.");
+  const shown = pl.platform.find(p => p.version === (state.platformShown || pl.current_version)) || pl.platform[0];
+  const versions = pl.platform.map(p => `<button class="review-item ${p.version === shown.version ? "active" : ""}" data-platform="${esc(p.version)}"><div class="review-item-top"><strong>${esc(p.version)}</strong><span class="status ${p.current ? "confirmed" : "not-started"}">${p.current ? "In force" : "Older"}</span></div><p>${p.builtin ? "Built in" : `${esc(istTime(p.created_at))} · ${esc(String(p.created_by || "").split(":")[1] || "")}`}${p.note ? ` · ${esc(p.note)}` : ""}</p></button>`).join("");
+  return `<div class="agent-layout">
+    <section class="card config-section"><div class="card-head"><div><h2>Platform rules <small class="muted t-lg t-regular">${esc(shown.version)}</small></h2><p>The rules every employee works under, on every mission. Safety is also enforced by the system, whatever is written here.</p></div><span class="status ${shown.current ? "confirmed" : "not-started"}">${shown.current ? "In force" : "Older version"}</span></div>
+      <div class="config-list">${longText("Rules the agent is given first", shown.rules)}${shown.note ? longText("What changed", shown.note) : ""}</div></section>
+    <aside class="card config-section"><div class="card-head"><div><h2>Versions</h2><p>Saved versions never change</p></div>${pl.can_edit ? `<button class="button primary small" data-action="add-platform">Add a version</button>` : ""}</div>
+      <div class="review-list">${versions}</div>
+      <p class="muted t-xs">The newest version applies to every employee and every mission as soon as it is saved. Check the result under Employees, "What the agent is told", first.${pl.can_edit ? "" : " Only platform staff (administrators and agent operations) can add a version."}</p></aside>
+  </div>`;
+}
+
+function nextVersionName(taken, prefix) {
+  let best = [1, 0, 0];
+  for (const v of taken) { const m = String(v).match(/(\d+)\.(\d+)\.(\d+)$/); if (m) { const t = [Number(m[1]), Number(m[2]), Number(m[3])]; if (t[0] > best[0] || (t[0] === best[0] && (t[1] > best[1] || (t[1] === best[1] && t[2] > best[2])))) best = t; } }
+  return `${prefix}-${best[0]}.${best[1] + 1}.0`;
+}
+
+function openPlatformModal() {
+  const cur = state.platform.platform.find(p => p.current);
+  const s = { version: nextVersionName(state.platform.platform.map(p => p.version), "PL"), rules: cur.rules, note: "", error: null, running: false };
   const draw = () => {
-    modal.innerHTML = `<div class="modal-head"><div><h2 id="modalTitle">Add an employee version</h2><p>Saved versions never change. A mission that does not pin a version starts using the newest one straight away, so test the change first.</p></div><button class="close-button" id="closeModal" aria-label="Close">×</button></div>
+    modal.innerHTML = `<div class="modal-head"><div><h2 id="modalTitle">Add a version of the platform rules</h2><p>Saved versions never change. The new one applies to every employee and every mission as soon as it is saved, so read it through before you save.</p></div><button class="close-button" id="closeModal" aria-label="Close">×</button></div>
       <div class="modal-body"><div class="form-grid">
-        <div class="field full"><label>Start from</label><div><button type="button" class="button ghost small" id="eLoad">Copy ${esc(state.employeeDef?.version || "the current version")} here</button></div></div>
-        <div class="field full"><label for="eText">Definition (JSON)</label><textarea id="eText" rows="16" spellcheck="false" class="mono t-xs" placeholder="Copy the current version, then change the version name and what you want to improve.">${esc(s.text)}</textarea><small>Change version at least. The platform's safety rules apply whatever is written here, and allowed_tools limits what the agent may do.</small></div>
+        <div class="field"><label for="plVersion">Version name</label><input id="plVersion" value="${esc(s.version)}" /></div>
+        <div class="field"><label for="plNote">What changed <span class="opt">(optional)</span></label><input id="plNote" value="${esc(s.note)}" placeholder="Asked it to answer in the person's language" /></div>
+        <div class="field full"><label for="plRules">Rules</label><small class="field-hint">Write them as instructions to the agent. They must say that it acts only through the tools it is given. Do not put names, numbers or anything about a person here.</small><textarea id="plRules" rows="14" spellcheck="false">${esc(s.rules)}</textarea></div>
         ${s.error ? `<p class="danger-text t-sm" style="grid-column:1/-1;margin:0;white-space:pre-wrap">${esc(s.error)}</p>` : ""}
       </div></div>
-      <div class="modal-foot"><button class="button ghost" id="cancelE">Cancel</button><button class="button primary" id="saveE" data-busy-label="Saving…" ${s.running || !s.text.trim() ? "disabled" : ""}>Save version</button></div>`;
+      <div class="modal-foot"><button class="button ghost" id="cancelPl">Cancel</button><button class="button primary" id="savePl" data-busy-label="Saving…" ${s.running ? "disabled" : ""}>Save version</button></div>`;
+    $("closeModal").addEventListener("click", closeModal); $("cancelPl").addEventListener("click", closeModal);
+    $("plVersion").addEventListener("input", e => { s.version = e.target.value; });
+    $("plNote").addEventListener("input", e => { s.note = e.target.value; });
+    $("plRules").addEventListener("input", e => { s.rules = e.target.value; });
+    $("savePl").addEventListener("click", async () => {
+      if (s.running) return;
+      s.running = true; s.error = null; $("savePl").disabled = true;
+      try {
+        const body = { version: s.version.trim(), rules: s.rules }; if (s.note.trim()) body.note = s.note.trim();
+        const out = await api("/platform", { method: "POST", body });
+        closeModal(); state.platformShown = out.platform.version; await loadAll(); toast("Saved. Every employee and mission now uses these rules.", "success");
+      } catch (e) { s.running = false; s.error = e.message; draw(); }
+    });
+  };
+  draw(); modalBackdrop.hidden = false;
+}
+
+// ---- adding an employee, or a new version of one, with a form ---------------------------------------------------------------------------
+// A starting point that is not tied to any one kind of mission: it works from the mission's own goal and questions.
+const GENERIC_EMPLOYEE = {
+  employee_id: "", version: "", name: "", purpose: "Work through one mission for each person: find out what the mission asks, using only approved wording and approved channels.",
+  persona: "Polite, patient and brief. Plain words, short sentences. Treat every person's time and privacy as precious, and slow down if someone sounds worried.",
+  instructions: "You work on one person's case at a time, for the mission you are given.\n- Read the case with case_get_context. It lists what is known and what is still missing.\n- The interview is run by the system using the mission's approved questions. You are woken when it finishes, or when the person is silent.\n- Judge only from the evidence: when it is clear and complete, call decision_propose with the finding that fits (one of the mission's findings), your honest confidence and the evidence you relied on.\n- If the evidence conflicts, the person may be someone else, or you are unsure, call review_request with a reason.\n- You cannot complete a case, record an opt-out or override a rule.",
+  guardrails: ["Never reveal or guess personal details.", "Never promise anything on behalf of the organisation."],
+  escalation_rules: ["The answers conflict with the record.", "The person is distressed or makes a complaint.", "The person asks for their data to be deleted."],
+  memory_policy: "Remember only fixed facts about this person through memory_note. Never carry anything from one person's case to another's.",
+  allowed_tools: ["case_get_context", "case_get_timeline", "decision_propose", "review_request", "memory_note"],
+  model: { effort: "medium", max_turns: 12, budget_usd: 0.5 },
+};
+
+function openEmployeeModal() {
+  const base = state.employeeDef || state.employees[0];
+  const tools = state.mission.tools;
+  const lines = a => (a || []).join("\n");
+  const fromDef = (d, mode) => ({
+    mode, employee_id: d.employee_id || "", version: "", name: d.name || "", purpose: d.purpose || "", persona: d.persona || "", instructions: d.instructions || "",
+    guardrails: lines(d.guardrails), escalation_rules: lines(d.escalation_rules), knowledge: (d.knowledge || []).map(k => `${k.title}: ${k.text}`).join("\n"), memory_policy: d.memory_policy || "",
+    tools: new Set(d.allowed_tools || []), effort: d.model?.effort || "medium", max_turns: d.model?.max_turns ?? 12, budget_usd: d.model?.budget_usd ?? 0.5, model_name: d.model?.name || "",
+  });
+  const suggest = (mode, id) => nextVersionName(state.employees.filter(e => e.employee_id === id).map(e => e.version), id === "verification-employee" ? "VE" : (id || "EMP").split("-").map(w => w[0]).join("").toUpperCase().slice(0, 4) || "EMP");
+  const s = { ...fromDef(base || GENERIC_EMPLOYEE, "version"), error: null, running: false };
+  s.version = suggest("version", s.employee_id);
+  const draw = () => {
+    const isNew = s.mode === "new";
+    modal.classList.add("modal-sticky");
+    modal.innerHTML = `<div class="modal-head"><div><h2 id="modalTitle">${isNew ? "Add a new employee" : "Add a version of " + esc(s.name || "an employee")}</h2><p>Saved versions never change. A mission that does not pin a version starts using the newest one straight away, so try the change on one mission first.</p></div><button class="close-button" id="closeModal" aria-label="Close">×</button></div>
+      <div class="modal-body"><fieldset class="studio-fields" ${s.running ? "disabled" : ""}><div class="form-grid">
+        <div class="field"><label for="eMode">What are you adding?</label><select id="eMode"><option value="version" ${isNew ? "" : "selected"}>A new version of an existing employee</option><option value="new" ${isNew ? "selected" : ""}>A brand-new employee</option></select></div>
+        <div class="field"><label for="eStart">Start from</label><select id="eStart">${state.employees.map(e => `<option value="v:${esc(e.version)}">${esc(e.name)} · ${esc(e.version)}</option>`).join("")}<option value="blank" ${isNew && s.fromBlank ? "selected" : ""}>A general-purpose starter (not tied to one kind of mission)</option></select></div>
+        ${isNew ? `<div class="field"><label for="eId">Employee id</label><input id="eId" value="${esc(s.employee_id)}" placeholder="survey-worker" /><small class="field-hint">Lower-case letters, numbers and dashes. It cannot change later.</small></div>` : `<div class="field"><label for="eWho">Which employee</label><select id="eWho">${[...new Set(state.employees.map(e => e.employee_id))].map(id => `<option value="${esc(id)}" ${id === s.employee_id ? "selected" : ""}>${esc(state.employees.filter(e => e.employee_id === id).at(-1).name)} (${esc(id)})</option>`).join("")}</select></div>`}
+        <div class="field"><label for="eVersion">Version name</label><input id="eVersion" value="${esc(s.version)}" /></div>
+        <div class="field"><label for="eName">Name</label><input id="eName" value="${esc(s.name)}" placeholder="Meera" /></div>
+        <div class="field full"><label for="ePurpose">What it is for</label><textarea id="ePurpose" rows="2">${esc(s.purpose)}</textarea></div>
+        <div class="field full"><label for="ePersona">Tone and manner with people</label><textarea id="ePersona" rows="3">${esc(s.persona)}</textarea></div>
+        <div class="field full"><label for="eInstr">How it works</label><small class="field-hint">The standing rules of the job, written as instructions to the employee.</small><textarea id="eInstr" rows="10">${esc(s.instructions)}</textarea></div>
+        <div class="field full"><label for="eNever">Things it never does <span class="opt">(one per line)</span></label><textarea id="eNever" rows="3">${esc(s.guardrails)}</textarea></div>
+        <div class="field full"><label for="eEsc">When it hands a case to a person <span class="opt">(one per line)</span></label><textarea id="eEsc" rows="3">${esc(s.escalation_rules)}</textarea></div>
+        <div class="field full"><label for="eKnow">What it knows <span class="opt">(one item per line, as "Title: text")</span></label><textarea id="eKnow" rows="3">${esc(s.knowledge)}</textarea></div>
+        <div class="field full"><label for="eMem">What it may remember between runs</label><textarea id="eMem" rows="2">${esc(s.memory_policy)}</textarea></div>
+        <div class="field full"><label>Tools it may use</label><small class="field-hint">The system refuses any other tool, whatever the model asks for. It needs "case_get_context", and "decision_propose" or "review_request", to be able to finish a case.</small>
+          <div class="tool-pick">${tools.map(t => `<label class="check-pill"><input type="checkbox" data-tool="${esc(t)}" ${s.tools.has(t) ? "checked" : ""}/> <span><code>${esc(t)}</code><small>${esc(TOOL_HELP[t]?.[1] || "")}</small></span></label>`).join("")}</div></div>
+        <div class="field"><label for="eEffort">How hard it thinks</label><select id="eEffort">${["low", "medium", "high"].map(x => `<option ${x === s.effort ? "selected" : ""}>${x}</option>`).join("")}</select></div>
+        <div class="field"><label for="eTurns">Most steps in one run</label><input id="eTurns" type="number" min="2" max="30" value="${esc(s.max_turns)}" /></div>
+        <div class="field"><label for="eBudget">Most one run may cost (US dollars)</label><input id="eBudget" type="number" min="0.05" max="5" step="0.05" value="${esc(s.budget_usd)}" /></div>
+        <div class="field"><label for="eModel">Model <span class="opt">(leave empty for the platform's)</span></label><input id="eModel" value="${esc(s.model_name)}" /></div>
+        ${s.error ? `<p class="danger-text t-sm" style="grid-column:1/-1;margin:0;white-space:pre-wrap">${esc(s.error)}</p>` : ""}
+      </div></fieldset></div>
+      <div class="modal-foot"><button class="button ghost" id="cancelE">Cancel</button><button class="button primary" id="saveE" data-busy-label="Saving…" ${s.running ? "disabled" : ""}>Save ${isNew ? "employee" : "version"}</button></div>`;
     $("closeModal").addEventListener("click", closeModal); $("cancelE").addEventListener("click", closeModal);
-    $("eLoad").addEventListener("click", () => { const { created_at, created_by, ...def } = state.employeeDef || {}; s.text = JSON.stringify(def, null, 2); s.error = null; draw(); });
-    $("eText").addEventListener("input", e => { s.text = e.target.value; $("saveE").disabled = !s.text.trim(); });
+    const keep = () => { // keep what was typed when the form is redrawn
+      const v = id => $(id)?.value;
+      Object.assign(s, { version: v("eVersion") ?? s.version, name: v("eName") ?? s.name, purpose: v("ePurpose") ?? s.purpose, persona: v("ePersona") ?? s.persona, instructions: v("eInstr") ?? s.instructions, guardrails: v("eNever") ?? s.guardrails, escalation_rules: v("eEsc") ?? s.escalation_rules, knowledge: v("eKnow") ?? s.knowledge, memory_policy: v("eMem") ?? s.memory_policy, effort: v("eEffort") ?? s.effort, max_turns: v("eTurns") ?? s.max_turns, budget_usd: v("eBudget") ?? s.budget_usd, model_name: v("eModel") ?? s.model_name });
+      if ($("eId")) s.employee_id = $("eId").value;
+      s.tools = new Set([...modal.querySelectorAll("[data-tool]")].filter(x => x.checked).map(x => x.dataset.tool));
+    };
+    $("eMode").addEventListener("change", e => { keep(); s.mode = e.target.value; if (s.mode === "new") { s.employee_id = ""; s.version = suggest("new", "emp"); } else { s.employee_id = base?.employee_id || "verification-employee"; s.version = suggest("version", s.employee_id); } draw(); });
+    $("eWho")?.addEventListener("change", e => { keep(); s.employee_id = e.target.value; s.version = suggest("version", s.employee_id); draw(); });
+    $("eStart").addEventListener("change", async e => {
+      keep();
+      const pick = e.target.value, mode = s.mode, id = s.employee_id;
+      let d;
+      if (pick === "blank") d = GENERIC_EMPLOYEE;
+      else { try { d = (await api("/employees/" + encodeURIComponent(pick.slice(2)))).employee; } catch (err) { toast(err.message, "warning"); return; } }
+      Object.assign(s, fromDef(d, mode), { employee_id: mode === "new" ? id : (d.employee_id || id), fromBlank: pick === "blank" });
+      s.version = suggest(mode, s.employee_id); draw();
+    });
     $("saveE").addEventListener("click", async () => {
-      let body;
-      try { body = JSON.parse(s.text); } catch { s.error = "That is not valid JSON. Check for a missing comma or quote."; draw(); return; }
-      s.running = true; s.error = null; $("saveE").disabled = true;
-      try { const out = await api("/employees", { method: "POST", body }); closeModal(); state.employeeDef = null; await loadAll(); await showEmployee(out.employee.version); toast("Version saved. Missions that follow the current version use it from now on.", "success"); }
-      catch (e) { s.running = false; s.error = e.message; draw(); }
+      if (s.running) return;
+      keep();
+      const list = t => t.split("\n").map(x => x.trim()).filter(Boolean);
+      const knowledge = [];
+      for (const line of list(s.knowledge)) { const i = line.indexOf(":"); if (i < 1) { s.error = `"${line.slice(0, 40)}" needs a title, a colon and the text, like "Title: text".`; draw(); return; } knowledge.push({ title: line.slice(0, i).trim(), text: line.slice(i + 1).trim() }); }
+      const body = { employee_id: s.employee_id.trim(), version: s.version.trim(), name: s.name.trim(), purpose: s.purpose.trim(), persona: s.persona.trim(), instructions: s.instructions.trim(), allowed_tools: [...s.tools], model: { effort: s.effort, max_turns: Number(s.max_turns), budget_usd: Number(s.budget_usd) } };
+      if (s.model_name.trim()) body.model.name = s.model_name.trim();
+      if (list(s.guardrails).length) body.guardrails = list(s.guardrails);
+      if (list(s.escalation_rules).length) body.escalation_rules = list(s.escalation_rules);
+      if (knowledge.length) body.knowledge = knowledge;
+      if (s.memory_policy.trim()) body.memory_policy = s.memory_policy.trim();
+      s.running = true; s.error = null; draw();
+      try {
+        const out = await api("/employees", { method: "POST", body });
+        modal.classList.remove("modal-sticky"); closeModal(); state.employeeDef = null; await loadAll(); await showEmployee(out.employee.version);
+        toast(s.mode === "new" ? "Employee saved. Pick it when you create a mission." : "Version saved. Missions that follow the newest version use it now.", "success");
+      } catch (e) { s.running = false; s.error = e.message; draw(); }
     });
   };
   draw(); modalBackdrop.hidden = false;
@@ -931,11 +1102,12 @@ function syncSignOff() {
 
 // ---- Mission Studio: write a mission as a plain brief, let the drafter structure it, read it, save it as a draft ---------------------------------------------
 function openStudioModal() {
-  const s = { step: "brief", running: false, error: null, result: null, brief: { name: "", programme_name: "", goal: "", people: "", find_out: "", approach: "", start_from: state.defaultMission, max_attempts: "", window_start_hour: "", window_end_hour: "" } };
+  const s = { step: "brief", running: false, error: null, result: null, brief: { name: "", programme_name: "", goal: "", people: "", find_out: "", approach: "", start_from: state.defaultMission, employee: "", max_attempts: "", window_start_hour: "", window_end_hour: "" } };
   const read = () => {
     const b = s.brief, out = { name: b.name.trim(), programme_name: b.programme_name.trim(), goal: b.goal.trim(), people: b.people.trim(), find_out: b.find_out.trim() };
     if (b.approach.trim()) out.approach = b.approach.trim();
     if (b.start_from) out.start_from = b.start_from;
+    if (b.employee) { const [id, ver] = b.employee.split("|"); out.employee_id = id; if (ver) out.employee_version = ver; }
     for (const k of ["max_attempts", "window_start_hour", "window_end_hour"]) if (String(b[k]).trim() !== "") out[k] = Number(b[k]);
     return out;
   };
@@ -967,7 +1139,8 @@ function openStudioModal() {
     const b = s.brief, picked = state.missions.find(m => m.version === b.start_from);
     const ws = String(b.window_start_hour), we = String(b.window_end_hour), att = String(b.max_attempts).trim();
     const hours = ws === "" && we === "" ? "usual contact hours" : `contact ${ws === "" ? "from the usual start" : "from " + hourLabel(Number(ws))} ${we === "" ? "to the usual end" : "to " + hourLabel(Number(we))}`;
-    return `${picked ? "Using " + picked.name : "Using the standard setup"} · ${att ? att + " attempts at most" : "usual attempts"} · ${hours}`;
+    const who = b.employee ? ` · employee ${b.employee.split("|").join(" ")}` : "";
+    return `${picked ? "Using " + picked.name : "Using the standard setup"}${who} · ${att ? att + " attempts at most" : "usual attempts"} · ${hours}`;
   };
 
   const field = (id, label, hint, rows, value, key) => {
@@ -1009,6 +1182,7 @@ function openStudioModal() {
           <section class="form-section"><button type="button" class="settings-toggle" id="sToggle" aria-expanded="${open}"><span><strong>Settings</strong> <span class="opt">(optional)</span><small id="sSummary">${esc(settingsSummary())}</small></span><svg class="settings-chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
             ${open ? `<div class="form-grid settings-panel">
               <div class="field full"><label for="sFrom">Use the approved first message, contact rules and employee from</label><select id="sFrom">${state.missions.map(m => `<option value="${esc(m.version)}" ${m.version === b.start_from ? "selected" : ""}>${esc(m.name)} · ${esc(m.version)}</option>`).join("")}</select><small>The first WhatsApp message must be a template approved by WhatsApp, so it is copied rather than drafted.</small></div>
+              <div class="field full"><label for="sEmp">Which employee does this mission</label><select id="sEmp"><option value="" ${!b.employee ? "selected" : ""}>The same as that mission</option>${employeeChoices(b.employee)}</select><small class="field-hint">Follow an employee to always use its newest version, or pin one exact version. Employees are set up under Claude engine.</small></div>
               <div class="field"><label for="sAtt">Most contact attempts per person</label><input id="sAtt" type="number" min="1" max="10" placeholder="Usual" value="${esc(b.max_attempts)}" /></div>
               <div class="field"><label for="sWs">Contact hours</label><div class="hours-row">${hourSelect("sWs", b.window_start_hour, "Contact hours, from")}<span>to</span>${hourSelect("sWe", b.window_end_hour, "Contact hours, until")}</div></div>
             </div>` : ""}</section>
@@ -1022,6 +1196,7 @@ function openStudioModal() {
     const bind = (id, key) => $(id)?.addEventListener("input", e => { s.brief[key] = e.target.value; if (e.target.tagName === "TEXTAREA") autosize(e.target); if (counted[id]) countLine(id, e.target.value); if (id === "sAtt") $("sSummary").textContent = settingsSummary(); });
     [["sName", "name"], ["sProg", "programme_name"], ["sGoal", "goal"], ["sPeople", "people"], ["sFind", "find_out"], ["sApproach", "approach"], ["sAtt", "max_attempts"]].forEach(([id, k]) => bind(id, k));
     $("sFrom")?.addEventListener("change", e => { s.brief.start_from = e.target.value; $("sSummary").textContent = settingsSummary(); });
+    $("sEmp")?.addEventListener("change", e => { s.brief.employee = e.target.value; $("sSummary").textContent = settingsSummary(); });
     [["sWs", "window_start_hour"], ["sWe", "window_end_hour"]].forEach(([id, k]) => $(id)?.addEventListener("change", e => { s.brief[k] = e.target.value; $("sSummary").textContent = settingsSummary(); }));
     $("sToggle").addEventListener("click", () => { s.settingsOpen = !s.settingsOpen; drawBrief(); });
     $("draftS").addEventListener("click", async () => {
@@ -1315,6 +1490,7 @@ function bind() {
   appView.querySelectorAll("[data-action]").forEach(el => el.addEventListener("click", () => action(el.dataset.action)));
   appView.querySelectorAll("[data-employee]").forEach(el => el.addEventListener("click", () => showEmployee(el.dataset.employee)));
   $("ctxMission")?.addEventListener("change", e => showContext(e.target.value));
+  appView.querySelectorAll("[data-platform]").forEach(el => el.addEventListener("click", () => { state.platformShown = el.dataset.platform; render(); }));
   appView.querySelectorAll("[data-camp]").forEach(el => el.addEventListener("click", () => campaignAct(el.dataset.camp, el.dataset.act)));
   $("missionPick")?.addEventListener("change", async e => {
     try { state.missionShown = await api(`/mission?version=${encodeURIComponent(e.target.value)}`); render(); } catch (err) { toast(err.message, "warning"); }
@@ -1333,6 +1509,7 @@ function action(name) {
   if (name === "purge") openPurgeModal();
   if (name === "new-campaign") openCampaignModal();
   if (name === "add-employee") openEmployeeModal();
+  if (name === "add-platform") openPlatformModal();
   if (name === "voice-preview") loadVoiceForm((state.missionShown ?? state.mission).version);
   if (name === "voice-publish") {
     const m = state.missionShown ?? state.mission, update = !!state.voiceForm?.link;

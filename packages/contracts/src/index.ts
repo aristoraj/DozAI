@@ -317,6 +317,15 @@ export const EmployeeInputSchema = z.object({
 });
 export type EmployeeInput = z.infer<typeof EmployeeInputSchema>;
 
+/** The platform layer: the rules every employee on every mission works under. Saved versions never change; the newest applies. */
+export const PlatformInputSchema = z.object({
+  version: z.string().regex(/^[A-Za-z0-9._-]{3,40}$/, "version: letters, numbers, dots, dashes and underscores, 3-40 characters"),
+  rules: z.string().trim().min(80, "the platform rules need at least a few sentences").max(6000),
+  /** What changed and why, for the audit trail. */
+  note: z.string().trim().max(400).optional(),
+});
+export type PlatformInput = z.infer<typeof PlatformInputSchema>;
+
 /** One thing the mission can find out about a person, in plain words. The agent picks one when it proposes a result. */
 export const MissionOutcomeSchema = z.object({
   key: ident,
@@ -388,6 +397,9 @@ export const MissionBriefSchema = z.object({
   approach: z.string().trim().max(1500).optional(),
   /** An existing mission to copy the approved first-message template, the contact rules and the employee from. */
   start_from: z.string().max(40).optional(),
+  /** Which employee does this mission: its id, and optionally one exact version. Without a version it follows the newest. Default: the start-from mission's. */
+  employee_id: z.string().regex(/^[a-z0-9-]{3,40}$/).optional(),
+  employee_version: z.string().max(40).optional(),
   max_attempts: z.number().int().min(1).max(10).optional(),
   window_start_hour: z.number().min(0).max(24).optional(),
   window_end_hour: z.number().min(0).max(24).optional(),
@@ -437,6 +449,8 @@ export const CampaignSchema = z.object({
   pause_reason: z.string().nullable(),
   sent_day: z.string().nullable(), sent_today: z.number().int().nonnegative(), sent_total: z.number().int().nonnegative(),
   last_run_at: z.string().nullable(), last_note: z.string().nullable(),
+  /** Set when the campaign was deleted. It is hidden everywhere; the people it messaged keep their cases. */
+  deleted_at: z.string().nullable().optional(), deleted_by: z.string().nullable().optional(),
 });
 export type Campaign = z.infer<typeof CampaignSchema>;
 

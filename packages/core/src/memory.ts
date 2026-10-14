@@ -19,8 +19,8 @@ export const MemoryNoteSchema = z.object({ key: z.enum(MEMORY_KEYS as [MemoryKey
 
 /** A problem with a note, or null when it may be kept. */
 export function memoryProblem(key: string, value: string): string | null {
+  if (!Object.hasOwn(MEMORY_SPEC, key)) return `unknown memory key ${key}`; // not "in": "__proto__" or "constructor" would pass
   const spec = MEMORY_SPEC[key as MemoryKey];
-  if (!spec) return `unknown memory key ${key}`;
   return (spec.values as readonly string[]).includes(value) ? null : `${key} must be one of: ${spec.values.join(", ")}`;
 }
 

@@ -304,9 +304,12 @@ export function createApp(deps: AppDeps) {
     if (req.body?.confirm !== true) throw new DozaiError("CONFIRMATION_REQUIRED", "send {\"confirm\": true} after reviewing the preview", 400);
     const { svc } = req.ctx; const t = req.principal!.tenant_id; const version = String(req.params.version);
     // One publish per mission at a time. Creating a form at ZoLabs is slow, and a second request that starts before the first has
-    // saved its form id would create a second form. The lock lasts at most five minutes if a request dies halfway.
-    const lock = `voicepub:${t}:${version}:${Math.floor(svc.now().getTime() / 300_000)}`;
-    if (!(await svc.store.claim(lock))) throw new DozaiError("PUBLISH_IN_PROGRESS", "This phone form is already being published. Wait for it to finish, then refresh the page. Publishing again now would create a duplicate form at ZoLabs.", 409);
+    // saved its form id would create a second form. The lock is per two-minute window and the previous window's lock must be free too,
+    // so a publish that started just before a boundary still holds it; a request that dies halfway blocks for at most four minutes.
+    const slot = Math.floor(svc.now().getTime() / 120_000), lock = `voicepub:${t}:${version}:${slot}`;
+    const busy = () => new DozaiError("PUBLISH_IN_PROGRESS", "This phone form is already being published. Wait for it to finish, then refresh the page. Publishing again now would create a duplicate form at ZoLabs.", 409);
+    if (!(await svc.store.claim(lock))) throw busy();
+    if (await svc.store.getIdem(`voicepub:${t}:${version}:${slot - 1}`)) { await svc.store.unclaim(lock); throw busy(); }
     try {
       const state = await voiceState(svc, t, version); // read after taking the lock, so a finished publish is seen as an existing form
       const { form_id } = await v.port.publishForm(state.definition, { existingFormId: state.link?.form_id, callbackUrl: v.callbackUrl });
@@ -373,6 +376,8 @@ export function createApp(deps: AppDeps) {
     if (c.deleted_at) throw new DozaiError("CASE_DELETED", "this case was deleted", 410);
     const actor = `${req.principal!.role}:${req.principal!.user_id}`;
     if (c.status === "draft" || c.status === "ready") c = await svc.beginSession(t, id, actor);
+    // A case stuck in "checking the answers" (an earlier call dropped and nothing was left to judge) goes back to waiting so a person can try again.
+    if (c.status === "evaluating") c = await svc.transition(t, id, c.version, "waiting", { actor, summary: "Back to waiting so another call can be placed" });
     const mission = await svc.getMission(t, c.mission_version);
     const reason = typeof req.body?.reason === "string" && req.body.reason.trim().length >= 5 ? req.body.reason.trim().slice(0, 300) : "Phone call requested by staff";
     const r = await new GatewayTools(svc).call({ session_id: `staff_${req.principal!.user_id}`.replace(/[^A-Za-z0-9_.:-]/g, "_"), tenant_id: t, case_id: id, mission_version: mission.version, employee_version: (await svc.employeeFor(mission)).version, actor }, "voice_call_request", { case_id: id, idempotency_key: `staff-${id}-${svc.now().getTime()}`, expected_version: c.version, reason });
@@ -452,14 +457,29 @@ export function createApp(deps: AppDeps) {
     const e = await svc.getEmployee(String(req.params.version));
     const mv = typeof req.query.mission_version === "string" ? req.query.mission_version : undefined;
     const m = mv ? await svc.getMission(t, mv) : await svc.defaultMission(t);
-    const c = buildAgentContext(e, m);
-    res.json({ employee_version: c.employee_version, mission_version: m.version, estimated_tokens: c.estimated_tokens, layers: c.layers, cached_as: ["platform and employee (shared by every mission)", "mission (shared by every case of this mission)"] });
+    const pv = typeof req.query.platform_version === "string" ? req.query.platform_version : undefined;
+    const platform = pv ? (await svc.listPlatform()).find(p => p.version === pv) : await svc.currentPlatform();
+    if (!platform) throw new DozaiError("NOT_FOUND", `platform version ${pv} does not exist`, 404);
+    const c = buildAgentContext(e, m, platform);
+    res.json({ platform_version: c.platform_version, employee_version: c.employee_version, mission_version: m.version, estimated_tokens: c.estimated_tokens, layers: c.layers, cached_as: ["platform and employee (shared by every mission)", "mission (shared by every case of this mission)"] });
   }));
 
   // Saved employees never change. A change is a new version; a mission that does not pin a version follows the newest.
   app.post("/api/employees", need("employee"), wrap(async (req, res) => {
     const e = await req.ctx.svc.createEmployee(req.principal!, req.body);
     res.status(201).json({ employee: employeeSummary(e, true, 0) });
+  }));
+
+  // ---- the platform layer: the rules every employee works under ---------------------------------------------------------
+  // Saved versions never change; the newest applies to every employee and mission at once, so a change is previewed before it is saved.
+  app.get("/api/platform", need("read"), wrap(async (req, res) => {
+    const all = await req.ctx.svc.listPlatform();
+    const current = all.at(-1)!;
+    res.json({ current_version: current.version, platform: all.map(p => ({ ...p, builtin: !p.created_at, current: p.version === current.version })).reverse(), can_edit: CAN.employee!.includes(req.principal!.role) });
+  }));
+  app.post("/api/platform", need("employee"), wrap(async (req, res) => {
+    const p = await req.ctx.svc.createPlatform(req.principal!, req.body);
+    res.status(201).json({ platform: p });
   }));
 
   // ---- approvals, operating controls and replay -----------------------------------------------------------------------------
@@ -540,6 +560,11 @@ export function createApp(deps: AppDeps) {
   }));
 
   app.post("/api/campaigns/run-now", need("intake"), wrap(async (req, res) => res.json(await campaignPass(req))));
+
+  app.post("/api/campaigns/:id/delete", need("intake"), wrap(async (req, res) => {
+    await new CampaignService(req.ctx.svc).remove(req.principal!, String(req.params.id));
+    res.json({ deleted: true, campaign_id: String(req.params.id) });
+  }));
 
   app.post("/api/campaigns/:id/:action", need("intake"), wrap(async (req, res) => {
     const { svc } = req.ctx; const t = req.principal!.tenant_id;
@@ -722,7 +747,12 @@ export function createApp(deps: AppDeps) {
   }
 
   // ---- errors ---------------------------------------------------------------------------------------------------------------
+  app.use("/api", (_req: Request, res: Response) => { res.status(404).json({ error: { code: "NOT_FOUND", message: "no such route" } }); });
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    // A body that is not JSON, or is too large. Not logged: the raw body can hold phone numbers or replies.
+    const type = (err as { type?: string } | null)?.type;
+    if (type === "entity.parse.failed") return res.status(400).json({ error: { code: "INVALID_JSON", message: "the request body is not valid JSON" } });
+    if (type === "entity.too.large") return res.status(413).json({ error: { code: "BODY_TOO_LARGE", message: "the request body is too large" } });
     if (err instanceof DozaiError) return res.status(err.httpStatus).json({ error: { code: err.code, message: err.message } });
     if (err instanceof ZodError) return res.status(400).json({ error: { code: "INVALID_INPUT", message: err.issues.map(i => `${i.path.join(".")}: ${i.message}`).join("; ") } });
     console.error(err);

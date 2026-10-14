@@ -85,7 +85,8 @@ export class ClaudeAgentRuntime implements AgentRuntimePort {
     if (!gate.ok) throw new DozaiError(gate.code, gate.message, 429);
     const mission = await svc.getMission(tenant, (await svc.getCase(tenant, caseId)).mission_version);
     const employee = await svc.employeeFor(mission);
-    const pack = buildAgentContext(employee, mission);
+    const platform = await svc.currentPlatform();
+    const pack = buildAgentContext(employee, mission, platform);
     const run: RunSettings = { model: this.modelOverride ?? employee.model?.name ?? DEFAULT_MODEL, effort: this.effortOverride ?? employee.model?.effort ?? "medium", maxTurns: this.maxTurnsOverride ?? employee.model?.max_turns ?? 12 };
     // The platform and employee layers are the same for every mission and the mission layer is the same for every case, so both are cached.
     const system: Anthropic.TextBlockParam[] = [
@@ -101,7 +102,7 @@ export class ClaudeAgentRuntime implements AgentRuntimePort {
     await svc.store.putSession(session);
     step("Session created", "session.created", `Pinned ${run.model} + ${employee.name} ${employee.version} + mission ${ctx.mission_version} (${pack.estimated_tokens} tokens of instructions)`);
     if (mode.kind === "start") await svc.beginSession(tenant, caseId, `agent:${ctx.session_id}`);
-    await svc.emit({ tenant_id: tenant, case_id: caseId }, "agent_session_started", `agent:${ctx.session_id}`, "Agent session started", { session_id: ctx.session_id, model: run.model, employee_version: employee.version, simulated: false });
+    await svc.emit({ tenant_id: tenant, case_id: caseId }, "agent_session_started", `agent:${ctx.session_id}`, "Agent session started", { session_id: ctx.session_id, model: run.model, platform_version: platform.version, employee_version: employee.version, simulated: false });
 
     // Only identifiers go in. Everything else is read through the tools.
     messages.push({ role: "user", content: mode.kind === "start"
@@ -110,24 +111,37 @@ export class ClaudeAgentRuntime implements AgentRuntimePort {
       : `System event: the participant has replied on case ${caseId} (mission ${ctx.mission_version}) and the reply is recorded as evidence. Read the context and decide.` });
     step("Objective received", "user.message", "Case and mission IDs only");
 
-    let outcome = await this.loop(svc, ctx, session, messages, tools, step, system, run);
-    const after = await svc.getCase(tenant, caseId);
-    if (mode.kind === "start" && outcome === "ok" && after.status === "waiting") {
-      step("Waiting for reply", "session.status_idle", "Catalyst owns the wait");
-      if (this.live) {
-        const sent = await this.live.dispatchOutbox(svc, tenant);
-        step("Message sent", "channel", `${sent} message(s) handed to the WhatsApp provider`);
-      } else {
-        const scenario = mode.scenario;
-        await this.channels.dispatchOutbox(svc, tenant);
-        await this.channels.scenarioReply(svc, tenant, caseId, scenario);
-        const resumed = await svc.getCase(tenant, caseId);
-        if (scenario !== "no_response" && resumed.status !== "complete") {
-          messages.push({ role: "user", content: "System event: the participant has replied and the response is recorded as evidence. Read the case context again and decide." });
-          step("Participant event", "system.message", "Normalised inbound response");
-          outcome = await this.loop(svc, ctx, session, messages, tools, step, system, run);
+    let outcome: Awaited<ReturnType<typeof this.loop>>;
+    try {
+      outcome = await this.loop(svc, ctx, session, messages, tools, step, system, run);
+      const after = await svc.getCase(tenant, caseId);
+      if (mode.kind === "start" && outcome === "ok" && after.status === "waiting") {
+        step("Waiting for reply", "session.status_idle", "Catalyst owns the wait");
+        if (this.live) {
+          const sent = await this.live.dispatchOutbox(svc, tenant);
+          step("Message sent", "channel", `${sent} message(s) handed to the WhatsApp provider`);
+        } else {
+          const scenario = mode.scenario;
+          await this.channels.dispatchOutbox(svc, tenant);
+          await this.channels.scenarioReply(svc, tenant, caseId, scenario);
+          const resumed = await svc.getCase(tenant, caseId);
+          if (scenario !== "no_response" && resumed.status !== "complete") {
+            messages.push({ role: "user", content: "System event: the participant has replied and the response is recorded as evidence. Read the case context again and decide." });
+            step("Participant event", "system.message", "Normalised inbound response");
+            outcome = await this.loop(svc, ctx, session, messages, tools, step, system, run);
+          }
         }
       }
+
+    } catch (e) {
+      // The model (or the network to it) failed. Close the session and say so, so nothing looks as if it is still running; the caller
+      // decides what happens to the case. The message is the provider's error, which holds nothing about the person.
+      const why = (e as Error).message.slice(0, 160);
+      step("Model call failed", "error", why);
+      session.status = "idle";
+      await svc.store.putSession(session);
+      await svc.emit({ tenant_id: tenant, case_id: caseId }, "agent_session_ended", `agent:${ctx.session_id}`, `Agent session failed: ${why}`, { session_id: ctx.session_id, cost_usd: session.cost_usd });
+      throw e;
     }
 
     session.status = outcome === "budget" ? "budget_reached" : "idle";

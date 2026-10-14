@@ -86,7 +86,12 @@ export function mcpOverHttp(url: string, token: string | { token(): Promise<stri
       const bearer = typeof token === "string" ? token : await token.token(); // a renewing token is asked for fresh on every call
       const transport = new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers: { Authorization: `Bearer ${bearer}` } } });
       try {
-        await client.connect(transport);
+        // Connecting only opens a session: nothing has been asked of the provider yet, so trying again cannot repeat an action. The
+        // provider's host sleeps when idle and can answer 500 "server not found" for the first request after a pause.
+        for (let attempt = 1; ; attempt++) {
+          try { await client.connect(transport); break; }
+          catch (e) { if (attempt >= 3) throw new Error(`ZoLabs could not be reached (${(e as Error).message.slice(0, 120)}). Nothing was changed there. Wait a minute and try again.`); await new Promise(r => setTimeout(r, 1500 * attempt)); }
+        }
         const res = (await client.callTool({ name, arguments: args })) as { isError?: boolean; content?: { type: string; text?: string }[] };
         const text = (res.content ?? []).filter(c => c.type === "text").map(c => c.text ?? "").join("\n");
         if (res.isError) throw new Error(`${name} failed: ${text.slice(0, 200)}`);
@@ -262,6 +267,8 @@ export async function dispatchVoice(svc: CaseService, tenant: string, voice: Voi
     const p = c && (await svc.store.getParticipant(tenant, c.participant_id));
     if (!c || !p?.phone_enc || p.consent === "declined") { await failCall("no contact allowed for this case"); continue; }
     if (!cfg.callsEnabled) { await failCall("phone calls are not switched on"); continue; }
+    // A call queued (or approved) inside the hours may still be waiting when the hours are over: it waits for the next window.
+    if (typeof o.payload.start_at !== "string" && !(await svc.insideWindow(c))) continue;
     const digits = decryptPhone(cfg.piiKey, p.phone_enc);
 
     // Claim before ringing: if anything fails after this point the call is NOT repeated, because ringing a person twice is worse than missing a call.
@@ -271,17 +278,26 @@ export async function dispatchVoice(svc: CaseService, tenant: string, voice: Voi
     const asked = Array.isArray(o.payload.asked) ? (o.payload.asked as string[]) : null;
     const context = buildCallContext({ first_name: p.first_name ?? p.display_name.split(" ")[0] ?? "there", programme: mission.programme_name ?? cfg.defaultProgramme, language: p.language, missing: asked ? asked.map(k => describeNeed(mission, k)) : null, known: asked ? knownForCall(mission, asked, await svc.store.listEvidence(c.case_id)) : undefined });
     const formId = Number(o.payload.form_id), at = typeof o.payload.start_at === "string" ? o.payload.start_at : undefined;
+    let communication_id: string;
     try {
       const base = { form_id: formId, phone: `+${digits}`, context, source_id: c.case_id };
-      const { communication_id } = at ? await voice.scheduleCall({ ...base, at }) : await voice.startCall(base);
-      const now = svc.now().toISOString();
+      ({ communication_id } = at ? await voice.scheduleCall({ ...base, at }) : await voice.startCall(base));
+    } catch (e) {
+      await failCall((e as Error).message.slice(0, 160));
+      continue;
+    }
+    // The provider has the call now. Whatever fails below must not mark it failed: the phone may already be ringing.
+    // The call record is written first, so its result can still be applied (and moves the case on) if a later step fails.
+    placed++;
+    const now = svc.now().toISOString();
+    try {
       await svc.store.putCall({ communication_id, tenant_id: tenant, case_id: c.case_id, form_id: formId, status: at ? "scheduled" : "in_progress", requested_at: o.created_at, scheduled_for: at, started_at: at ? undefined : now, asked: asked ?? [], reason: typeof o.payload.reason === "string" ? o.payload.reason : undefined });
       await svc.store.putOutbox({ ...o, status: "sent", attempts: o.attempts + 1, payload: { ...o.payload, provider_call_id: communication_id } });
       await svc.emit(c, "call_started", "zolabs", at ? `Phone call scheduled (id ${communication_id.slice(0, 8)})` : `Phone call started (id ${communication_id.slice(0, 8)})`, { outbox_id: o.outbox_id, communication_id });
-      if (!at && c.status === "call_scheduled") await svc.transition(tenant, c.case_id, c.version, "calling", { actor: "zolabs", summary: "Phone call started" });
-      placed++;
+      const cur = await svc.getCase(tenant, c.case_id); // re-read: the case can change while the provider is called
+      if (!at && cur.status === "call_scheduled") await svc.transition(tenant, cur.case_id, cur.version, "calling", { actor: "zolabs", summary: "Phone call started" });
     } catch (e) {
-      await failCall((e as Error).message.slice(0, 160));
+      console.error("voice dispatch after the call was placed", communication_id, (e as Error).message);
     }
   }
   return placed;
@@ -314,11 +330,15 @@ export async function syncCalls(svc: CaseService, tenant: string, voice: VoicePo
   for (const call of await svc.store.listCalls(tenant, o.caseId)) {
     if (call.status !== "in_progress" && call.status !== "scheduled") continue;
     if (call.status === "scheduled" && call.scheduled_for && Date.parse(call.scheduled_for) > now) continue; // not due yet
-    if (now - Date.parse(call.requested_at) > GIVE_UP_AFTER_MS) continue;                                      // the nightly clean-up deals with these
+    // A day after it was due with still no result, the call is not going to report one: it is closed as failed, which records it
+    // once and puts the case back to waiting, so it is not left "calling" for ever. There is no separate clean-up job.
+    const stale = now - Date.parse(call.scheduled_for ?? call.requested_at) > GIVE_UP_AFTER_MS;
     checked++;
     try {
-      const result = await voice.fetchResult(call.communication_id, { formId: call.form_id || undefined });
-      if (!result || !["completed", "no_answer", "busy", "declined", "failed", "cancelled"].includes(result.status)) continue;
+      const fetched = await voice.fetchResult(call.communication_id, { formId: call.form_id || undefined });
+      const final = !!fetched && ["completed", "no_answer", "busy", "declined", "failed", "cancelled"].includes(fetched.status);
+      if (!final && !stale) continue;
+      const result: VoiceResult = final ? fetched! : { communication_id: call.communication_id, status: "failed", answers: {} };
       const r = await ingestVoiceResult(svc, tenant, call.case_id, result);
       if (r.applied) applied++;
       if (r.finished) wake.push({ case_id: call.case_id, key: `voice:${call.communication_id}` });

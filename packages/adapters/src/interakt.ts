@@ -8,7 +8,7 @@
 // Who may be messaged is decided by consent, contact hours, attempt limits and the kill switch (see CaseService.gateContact),
 // not by a list of numbers.
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { decryptPhone, phoneDigits, phoneHash, type CaseService, type InboxEvent, type OutboxItem } from "@dozai/core";
+import { decryptPhone, isStopRequest, phoneDigits, phoneHash, type CaseService, type InboxEvent, type OutboxItem } from "@dozai/core";
 import type { ChannelPort } from "./index";
 
 export interface InteraktConfig {
@@ -119,7 +119,7 @@ export function classifyReply(text: string, opts: { bareNoIsStop?: boolean } = {
   const t = text.trim().toLowerCase();
   // A bare "No" means stop only while we are asking for consent; later it is a legitimate answer.
   const bareNo = opts.bareNoIsStop !== false && /^no[\s,.!]*$/.test(t);
-  if (/\b(stop|unsubscribe|opt[- ]?out|do not contact|don'?t contact)\b/.test(t) || bareNo) return { optOut: true, consent: false };
+  if (isStopRequest(text) || bareNo) return { optOut: true, consent: false }; // the same rule as the conversation reader
   if (/^(yes|y|ok|okay|sure|haan|ha|continue)\b/.test(t)) return { optOut: false, consent: true };
   return { optOut: false, consent: false };
 }
@@ -180,6 +180,8 @@ export class InteraktChannels implements ChannelPort {
     let sent = 0;
     for (const o of await svc.store.listOutbox(tenant)) {
       if (o.status !== "pending" || (o.kind !== "whatsapp_template" && o.kind !== "whatsapp_text")) continue;
+      // A template is our first word, so it goes out only inside the contact hours, even if it was queued (or retried) earlier.
+      if (o.kind === "whatsapp_template") { const c = await svc.store.getCase(tenant, o.case_id); if (c && !(await svc.insideWindow(c))) continue; }
       // Take the message before sending it. Every webhook (replies, and each "delivered" and "read" notice) starts a scheduler pass, so
       // several passes can run at once and each would have seen this message as still pending and sent it again. One pass wins; a
       // retry after a temporary failure is a new attempt and is allowed. A message is never sent twice, even if a pass dies halfway.
@@ -217,6 +219,7 @@ export class InteraktChannels implements ChannelPort {
     const c = await svc.store.getCase(tenant, o.case_id);
     const p = c && (await svc.store.getParticipant(tenant, c.participant_id));
     if (!c || !p?.phone_enc) { await this.fail(svc, o, "no contact number on file", true); return false; }
+    if (p.consent === "declined") { await this.fail(svc, o, "no contact allowed for this case", true); return false; } // they may have said stop after this was queued
     const digits = decryptPhone(this.cfg.piiKey, p.phone_enc);
 
     const bundle = await svc.getMission(tenant, c.mission_version); // the mission this participant belongs to
@@ -279,7 +282,8 @@ export async function processInbox(svc: CaseService, tenant: string, piiKey: str
       await svc.store.putInbox({ ...item, status: "done", event: { ...item.event, ...(ev.text !== undefined ? { text: "" } : {}) } });
       processed++;
     } catch (e) {
-      await svc.store.putInbox({ ...item, status: "error", error: (e as Error).message.slice(0, 200) });
+      const ev = item.event as { text?: string };
+      await svc.store.putInbox({ ...item, status: "error", error: (e as Error).message.slice(0, 200), event: { ...item.event, ...(ev.text !== undefined ? { text: "" } : {}) } }); // nothing retries it, so the words are not kept
       errors++;
     }
   }

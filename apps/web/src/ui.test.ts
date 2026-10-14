@@ -115,7 +115,8 @@ describe("the live app", () => {
     await wait(() => document.getElementById("caseCount")!.textContent === "0", "case removed");
     click(q('.nav-item[data-view="audit"]'));
     await wait(() => text().includes("Case deleted"), "audit entry");
-    expect(document.body.textContent).not.toContain("Ravi");
+    // the dialog and the drawer close after the work is done, so wait for the name to be gone everywhere rather than asserting at once
+    await wait(() => !document.body.textContent!.includes("Ravi"), "name gone from every part of the page");
   });
 
   it("runs a conversation: yes, a wrong reply, then an answer, shown as a transcript", async () => {
@@ -253,6 +254,8 @@ describe("the live app", () => {
     const rows = [{ name: "Kiran Test", phone: "9876500201", cohort: "Udaan" }, { name: "Lata Test", phone: "9876500202", cohort: "Udaan" }, { name: "Mohan Test", phone: "9876500203", cohort: "Other" }];
     await fetch(base + "/api/participants/import", { method: "POST", headers: { "content-type": "application/json", "x-dozai-role": "admin" }, body: JSON.stringify({ rows, consent_attested: true, mission_version: "MSN-002-v1" }) });
     click(document.getElementById("refresh"));
+    click(q('.nav-item[data-view="cases"]'));
+    await wait(() => text().includes("Kiran Test"), "imported people loaded");
     click(q('.nav-item[data-view="campaigns"]'));
     await wait(() => text().includes("No campaigns yet"), "empty campaigns");
 
@@ -261,6 +264,7 @@ describe("the live app", () => {
     expect((document.getElementById("saveCmp") as HTMLButtonElement).disabled).toBe(true); // needs a name
     name.value = "Udaan first message"; name.dispatchEvent(new Event("input", { bubbles: true }));
     const cohort = document.getElementById("cmpCohort") as HTMLSelectElement;
+    await wait(() => [...cohort.options].some(o => o.textContent === "Cohort Udaan (2)"), "cohort options");
     expect([...cohort.options].map(o => o.textContent)).toEqual(expect.arrayContaining(["Cohort Udaan (2)", "Cohort Other (1)"]));
     cohort.value = "Udaan"; cohort.dispatchEvent(new Event("change", { bubbles: true }));
     click(document.getElementById("saveCmp"));
@@ -276,6 +280,13 @@ describe("the live app", () => {
     await wait(() => text().includes("2 of 2 messaged"), "progress after start", 6000);
     expect(text()).toContain("Finished");        // everyone in it has been messaged
     expect(text()).toContain("Waiting for reply");
+
+    // A finished campaign can be deleted from its card; the people it messaged keep their cases.
+    click(q('[data-act="delete"]'));
+    await wait(() => !!document.getElementById("okConfirm"), "delete confirmation");
+    expect(document.getElementById("modal")!.textContent).toContain("keep their cases");
+    click(document.getElementById("okConfirm"));
+    await wait(() => text().includes("No campaigns yet"), "campaign gone after delete", 6000);
     click(q('.nav-item[data-view="cases"]'));
     await wait(() => text().includes("Kiran Test"), "cases list");
     await wait(() => state_status("Kiran Test").includes("Waiting for a reply"), "Kiran Test waiting for a reply"); // the first message is queued just after the campaign starts
@@ -316,6 +327,7 @@ describe("the live app", () => {
     expect((bar().querySelector("[data-dash-clear]") as HTMLElement).hidden).toBe(true);
 
     // One mission: every number is that mission's, and the page does not have to be redrawn.
+    await new Promise(r => setTimeout(r, 250));                              // let any reload still finishing from the steps above land first
     const page = document.querySelector("[data-overview]");
     const mineOf = (v: string) => cases.filter(c => (c.mission_version ?? "MSN-001-v1.3") === v);
     const second = summarize(mineOf("MSN-002-v1"));
@@ -382,27 +394,65 @@ describe("the live app", () => {
     await wait(() => text().includes("Platform rules (every employee)"), "layers");
     expect(text()).toContain("Nothing about a person is ever in here");
 
-    // add a version by copying the current one
+    // add a version with the form: it starts as a copy of the current one
+    const setv = (id: string, v: string) => { const el = document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement; el.value = v; el.dispatchEvent(new Event("input", { bubbles: true })); };
     click(q('[data-action="add-employee"]'));
-    click(document.getElementById("eLoad"));
-    await wait(() => (document.getElementById("eText") as HTMLTextAreaElement).value.includes("VE-1.0.0"), "definition copied");
-    const ta = document.getElementById("eText") as HTMLTextAreaElement;
-    const def = JSON.parse(ta.value);
-    ta.value = JSON.stringify({ ...def, version: "VE-1.1.0", persona: "Calm and unhurried. Always thanks people for their time." });
-    ta.dispatchEvent(new Event("input", { bubbles: true }));
+    await wait(() => !!document.getElementById("ePersona"), "employee form");
+    expect((document.getElementById("eVersion") as HTMLInputElement).value).toBe("VE-1.1.0");            // the next name is suggested
+    expect((document.getElementById("eName") as HTMLInputElement).value).toBe("Meera");
+    expect((q('[data-tool="case_get_context"]') as HTMLInputElement).checked).toBe(true);
+    setv("ePersona", "Calm and unhurried. Always thanks people for their time.");
     click(document.getElementById("saveE"));
     await wait(() => text().includes("VE-1.1.0") && text().includes("Calm and unhurried"), "new version shown");
     expect(text()).toContain("Current");
     expect(text()).toContain("older");
 
-    // a bad one explains itself and stays open
+    // a bad one explains itself and stays open: no tools ticked that can finish a case
     click(q('[data-action="add-employee"]'));
-    const t2 = document.getElementById("eText") as HTMLTextAreaElement;
-    t2.value = JSON.stringify({ ...def, version: "VE-1.2.0", allowed_tools: ["mission_get_bundle"] });
-    t2.dispatchEvent(new Event("input", { bubbles: true }));
+    await wait(() => !!document.getElementById("ePersona"), "employee form again");
+    for (const t of document.querySelectorAll("[data-tool]")) (t as HTMLInputElement).checked = t.getAttribute("data-tool") === "mission_get_bundle";
     click(document.getElementById("saveE"));
     await wait(() => document.getElementById("modal")!.textContent!.includes("must be allowed case_get_context"), "plain error");
     click(document.getElementById("cancelE"));
+
+    // a brand-new employee, started from the general-purpose starter
+    click(q('[data-action="add-employee"]'));
+    await wait(() => !!document.getElementById("eMode"), "employee form for a new employee");
+    const mode = document.getElementById("eMode") as HTMLSelectElement; mode.value = "new"; mode.dispatchEvent(new Event("change", { bubbles: true }));
+    await wait(() => !!document.getElementById("eId"), "employee id field");
+    const start = document.getElementById("eStart") as HTMLSelectElement; start.value = "blank"; start.dispatchEvent(new Event("change", { bubbles: true }));
+    await wait(() => (document.getElementById("ePurpose") as HTMLTextAreaElement).value.includes("Work through one mission"), "starter loaded");
+    setv("eId", "survey-worker"); setv("eName", "Sana"); setv("eVersion", "SW-1.0.0");
+    click(document.getElementById("saveE"));
+    await wait(() => text().includes("Sana") && text().includes("SW-1.0.0"), "new employee shown");
+
+  });
+
+  it("the platform rules are a layer you can read, and add a version of, that every employee then uses", async () => {
+    click(q('.nav-item[data-view="agent"]'));
+    await wait(() => !!q('[data-agent-tab="platform"]'), "agent page");
+    expect(text()).toContain("1. Platform rules");           // the three layers are shown at the top of every tab
+    expect(text()).toContain("2. Employee");
+    expect(text()).toContain("3. Mission");
+    click(q('[data-agent-tab="platform"]'));
+    await wait(() => text().includes("Rules the agent is given first"), "platform tab");
+    expect(text()).toContain("PL-1.0.0");
+    expect(text()).toContain("only through the tools provided");
+    click(q('[data-action="add-platform"]'));
+    await wait(() => !!document.getElementById("plRules"), "platform form");
+    expect((document.getElementById("plVersion") as HTMLInputElement).value).toBe("PL-1.1.0");
+    const rules = document.getElementById("plRules") as HTMLTextAreaElement;
+    rules.value = rules.value + " Answer in the participant's own language."; rules.dispatchEvent(new Event("input", { bubbles: true }));
+    click(document.getElementById("savePl"));
+    await wait(() => text().includes("PL-1.1.0") && text().includes("participant's own language"), "new platform version shown");
+    expect(text()).toContain("In force");
+    // too short: the server says so in plain words and the form stays open
+    click(q('[data-action="add-platform"]'));
+    await wait(() => !!document.getElementById("plRules"), "platform form again");
+    const r2 = document.getElementById("plRules") as HTMLTextAreaElement; r2.value = "too short"; r2.dispatchEvent(new Event("input", { bubbles: true }));
+    click(document.getElementById("savePl"));
+    await wait(() => document.getElementById("modal")!.textContent!.includes("at least a few sentences"), "plain error");
+    click(document.getElementById("cancelPl"));
   });
 
   it("publishes the phone form from the mission page, then finishes a simulated call from the case page", async () => {
@@ -876,6 +926,18 @@ describe("the live app", () => {
     click(document.getElementById("cancelS"));
     expect(dialog.classList.contains("modal-sticky")).toBe(false);
     expect(dialog.innerHTML).toBe("");
+  });
+
+  it("a page fades in when you open it, but redrawing the same page after a click does not flash it again", async () => {
+    click(q(".nav-item[data-view=\"cases\"]"));
+    await wait(() => !!q("table.data-table"), "the cases table");
+    expect(document.getElementById("appView")!.firstElementChild!.classList.contains("view-enter")).toBe(true);
+    const filter = document.getElementById("caseFilter") as HTMLSelectElement;
+    const before = filter.value, other = [...filter.options].find(o => o.value !== before)!.value;
+    filter.value = other; filter.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(document.getElementById("appView")!.firstElementChild!.classList.contains("view-enter")).toBe(false);
+    (document.getElementById("caseFilter") as HTMLSelectElement).value = before;               // leave the page as it was for the next test
+    document.getElementById("caseFilter")!.dispatchEvent(new Event("change", { bubbles: true }));
   });
 
   it("the cases list has a plain Status and a separate Result, and the Mission page lists the results the mission can end with", async () => {

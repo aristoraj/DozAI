@@ -28,6 +28,11 @@ export interface CampaignProgress {
   complete: number;
   /** First messages that could not be delivered to WhatsApp. */
   send_failed: number;
+  /** Everyone in this campaign's mission (and cohort, if it has one), whether or not they can be messaged by it. */
+  in_mission: number;
+  /** Of those, people a campaign cannot message: already contacted, or already in another campaign. */
+  already_contacted: number;
+  in_other_campaign: number;
 }
 
 export interface CampaignRunResult { campaign_id: string; sent: number; errors: number; note: string | null }
@@ -65,18 +70,50 @@ export class CampaignService {
   }
 
   async list(tenant: string): Promise<Campaign[]> {
-    return (await this.store.listCampaigns(tenant)).sort((a, b) => b.created_at.localeCompare(a.created_at));
+    return (await this.store.listCampaigns(tenant)).filter(c => !c.deleted_at).sort((a, b) => b.created_at.localeCompare(a.created_at));
+  }
+
+  /** Remove a campaign from every screen. A running one must be paused or stopped first, so nothing is deleted mid-send. */
+  async remove(p: Principal, id: string): Promise<void> {
+    await this.get(p.tenant_id, id); // 404 when it does not exist
+    await this.change(p.tenant_id, id, async c => {
+      if (c.deleted_at) throw new DozaiError("NOT_FOUND", `campaign ${id} not found`, 404);
+      if (c.status === "running") throw new DozaiError("ILLEGAL_STATE", "this campaign is running; pause or stop it before deleting it", 409);
+      const now = this.svc.now().toISOString();
+      return { ...c, deleted_at: now, deleted_by: p.user_id, updated_at: now };
+    });
+  }
+
+  /**
+   * Every change to a campaign is made on the copy just read and written only if nobody changed it meanwhile; otherwise it is read
+   * and decided again. A pause, a stop or a batch's counters can then never undo one another. `fn` returning null changes nothing.
+   */
+  private async change(tenant: string, id: string, fn: (c: Campaign) => Promise<Campaign | null>): Promise<Campaign | undefined> {
+    for (let i = 0; i < 8; i++) {
+      const c = await this.store.getCampaign(tenant, id);
+      if (!c) return undefined;
+      const next = await fn(c);
+      if (!next) return c;
+      if (await this.store.putCampaignIf(next, c)) return next;
+    }
+    throw new DozaiError("CONFLICT", "this campaign is being changed by someone else; try again", 409);
   }
 
   /** Start, pause, resume or stop. Stopped and finished campaigns cannot be restarted: make a new one. */
   async act(p: Principal, id: string, action: CampaignAction): Promise<Campaign> {
-    const c = await this.get(p.tenant_id, id);
+    await this.get(p.tenant_id, id); // 404 when it does not exist
+    return (await this.change(p.tenant_id, id, c => this.decide(p, c, action)))!;
+  }
+
+  private async decide(p: Principal, c: Campaign, action: CampaignAction): Promise<Campaign> {
+    if (c.deleted_at) throw new DozaiError("NOT_FOUND", `campaign ${c.campaign_id} not found`, 404);
     const now = this.svc.now().toISOString();
     const bad = (why: string) => new DozaiError("ILLEGAL_STATE", why, 409);
     let next: Campaign;
     switch (action) {
       case "start":
         if (c.status !== "draft") throw bad(`this campaign is ${c.status}; only a draft campaign can be started`);
+        if (!(await this.progress(p.tenant_id, [c])).get(c.campaign_id)?.queued) throw bad("nobody can be messaged by this campaign yet: add people to this mission first, or pick another cohort");
         next = { ...c, status: "running", started_at: now, pause_reason: null, last_note: "Started." };
         break;
       case "pause":
@@ -93,19 +130,20 @@ export class CampaignService {
         break;
     }
     next.updated_at = now;
-    await this.store.putCampaign(next);
     return next;
   }
 
   // ---- who is in it ----------------------------------------------------------------------------------------------------
 
-  private async cohorts(tenant: string, need: boolean): Promise<Map<string, string>> {
-    if (!need) return new Map();
-    return new Map((await this.store.listParticipants(tenant)).map(p => [p.participant_id, p.cohort]));
+  /** Each participant's cohort, and who has opted out or declined (they are never queued, so they cannot use up the daily cap). */
+  private async cohorts(tenant: string): Promise<{ cohortOf: Map<string, string>; declined: Set<string> }> {
+    const people = await this.store.listParticipants(tenant);
+    return { cohortOf: new Map(people.map(p => [p.participant_id, p.cohort])), declined: new Set(people.filter(p => p.consent === "declined").map(p => p.participant_id)) };
   }
 
-  private isEligible(c: CaseRecord, camp: Campaign, cohortOf: Map<string, string>): boolean {
+  private isEligible(c: CaseRecord, camp: Campaign, { cohortOf, declined }: { cohortOf: Map<string, string>; declined: Set<string> }): boolean {
     if (c.deleted_at || (c.status !== "draft" && c.status !== "ready") || c.campaign_id) return false;
+    if (declined.has(c.participant_id)) return false;
     if (missionOf(c) !== camp.mission_version) return false;
     if (camp.cohort && cohortOf.get(c.participant_id) !== camp.cohort) return false;
     // Loaded after the campaign started: not part of it. (Cases without a creation time pre-date this rule.)
@@ -118,39 +156,45 @@ export class CampaignService {
     const out = new Map<string, CampaignProgress>();
     if (!camps.length) return out;
     const cases = (await this.store.listCases(tenant)).filter(c => !c.deleted_at);
-    const needCohort = camps.some(c => c.cohort);
-    const cohortOf = await this.cohorts(tenant, needCohort);
+    const people = await this.cohorts(tenant);
     const outbox = await this.store.listOutbox(tenant);
     for (const camp of camps) {
       const mine = cases.filter(c => c.campaign_id === camp.campaign_id);
       const ids = new Set(mine.map(c => c.case_id));
       out.set(camp.campaign_id, {
         // A draft campaign counts everyone who would be included if it started now.
-        queued: cases.filter(c => this.isEligible(c, camp.status === "draft" ? { ...camp, started_at: null } : camp, cohortOf)).length,
+        queued: cases.filter(c => this.isEligible(c, camp.status === "draft" ? { ...camp, started_at: null } : camp, people)).length,
         contacted: mine.length,
         waiting: mine.filter(c => c.status === "waiting").length,
         needs_review: mine.filter(c => c.status === "review").length,
         complete: mine.filter(c => c.status === "complete").length,
         send_failed: outbox.filter(o => o.kind === "whatsapp_template" && o.status === "failed" && ids.has(o.case_id)).length,
+        ...this.reach(camp, cases, people.cohortOf),
       });
     }
     return out;
+  }
+
+  private reach(camp: Campaign, cases: CaseRecord[], cohortOf: Map<string, string>) {
+    const pool = cases.filter(c => missionOf(c) === camp.mission_version && (!camp.cohort || cohortOf.get(c.participant_id) === camp.cohort));
+    const other = pool.filter(c => c.campaign_id && c.campaign_id !== camp.campaign_id).length;
+    return { in_mission: pool.length, in_other_campaign: other, already_contacted: pool.filter(c => !c.campaign_id && c.status !== "draft" && c.status !== "ready").length };
   }
 
   // ---- the scheduler step ---------------------------------------------------------------------------------------------
 
   /** One pass over every running campaign. Queues first messages; the channel sends them afterwards. Safe to run concurrently. */
   async run(tenant: string): Promise<CampaignRunResult[]> {
-    const running = (await this.store.listCampaigns(tenant)).filter(c => c.status === "running");
+    const running = (await this.store.listCampaigns(tenant)).filter(c => c.status === "running" && !c.deleted_at);
     if (!running.length) return [];
     const cases = await this.store.listCases(tenant);
-    const cohortOf = await this.cohorts(tenant, running.some(c => c.cohort));
+    const people = await this.cohorts(tenant);
     const results: CampaignRunResult[] = [];
-    for (const camp of running) results.push(await this.runOne(tenant, camp, cases, cohortOf));
+    for (const camp of running) results.push(await this.runOne(tenant, camp, cases, people));
     return results;
   }
 
-  private async runOne(tenant: string, camp: Campaign, cases: CaseRecord[], cohortOf: Map<string, string>): Promise<CampaignRunResult> {
+  private async runOne(tenant: string, camp: Campaign, cases: CaseRecord[], people: { cohortOf: Map<string, string>; declined: Set<string> }): Promise<CampaignRunResult> {
     const svc = this.svc;
     let sent = 0, errors = 0;
     let note: string | null = null;
@@ -162,7 +206,7 @@ export class CampaignService {
       const now = svc.now();
       const day = dayOf(now, policy.utcOffsetMinutes);
       const sentToday = camp.sent_day === day ? camp.sent_today : 0;
-      const queue = cases.filter(c => this.isEligible(c, camp, cohortOf));
+      const queue = cases.filter(c => this.isEligible(c, camp, people));
       const h = localHour(now, policy.utcOffsetMinutes);
 
       if (!queue.length) {
@@ -204,15 +248,15 @@ export class CampaignService {
 
   /** Writes counters on top of the latest copy, so a pause pressed during the run is never undone. */
   private async record(tenant: string, id: string, r: { sent: number; day: string; sentToday: number; note: string | null; finished: boolean }) {
-    const fresh = await this.store.getCampaign(tenant, id);
-    if (!fresh) return;
-    const now = this.svc.now().toISOString();
-    const keepStatus = fresh.status === "running";
-    await this.store.putCampaign({
-      ...fresh,
-      status: keepStatus && r.finished ? "completed" : fresh.status,
-      sent_day: r.day || fresh.sent_day, sent_today: r.sent || r.day !== fresh.sent_day ? r.sentToday + r.sent : fresh.sent_today, sent_total: fresh.sent_total + r.sent,
-      last_run_at: now, last_note: keepStatus ? r.note : fresh.last_note, updated_at: now,
+    await this.change(tenant, id, async fresh => {
+      const now = this.svc.now().toISOString();
+      const keepStatus = fresh.status === "running";
+      return {
+        ...fresh,
+        status: keepStatus && r.finished ? "completed" : fresh.status,
+        sent_day: r.day || fresh.sent_day, sent_today: r.sent || r.day !== fresh.sent_day ? r.sentToday + r.sent : fresh.sent_today, sent_total: fresh.sent_total + r.sent,
+        last_run_at: now, last_note: keepStatus ? r.note : fresh.last_note, updated_at: now,
+      };
     });
   }
 
@@ -234,10 +278,8 @@ export class CampaignService {
       if (recent.length < inRow || !recent.every(o => o.status === "failed")) continue;
       const why = String(recent[0]!.payload.last_error ?? "unknown error").slice(0, 120);
       const reason = `Paused automatically: the last ${inRow} first messages all failed (${why}). Fix the cause, then resume.`;
-      const fresh = await this.store.getCampaign(tenant, camp.campaign_id);
-      if (fresh?.status !== "running") continue;
-      await this.store.putCampaign({ ...fresh, status: "paused", pause_reason: reason, last_note: reason, updated_at: this.svc.now().toISOString() });
-      paused.push({ campaign_id: camp.campaign_id, reason });
+      const done = await this.change(tenant, camp.campaign_id, async fresh => fresh.status === "running" ? { ...fresh, status: "paused", pause_reason: reason, last_note: reason, updated_at: this.svc.now().toISOString() } : null);
+      if (done?.status === "paused" && done.pause_reason === reason) paused.push({ campaign_id: camp.campaign_id, reason });
     }
     return paused;
   }

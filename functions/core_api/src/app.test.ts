@@ -175,6 +175,29 @@ const employee = (over: Record<string, unknown> = {}) => ({
   allowed_tools: ["case_get_context", "mission_get_bundle", "decision_propose", "review_request"], ...over,
 });
 
+describe("the platform layer over the API", () => {
+  const rules = "You work for DozAI. You act only through the tools you are given. Never guess a fact about a person. Keep every action safe to repeat.";
+  it("shows the built-in rules as current, lets only platform staff add a version, and the newest becomes what the agent is told", async () => {
+    const { call } = start();
+    const first = (await call("GET", "/platform", undefined, "reviewer")).json;
+    expect(first).toMatchObject({ current_version: "PL-1.0.0", can_edit: false });
+    expect(first.platform[0]).toMatchObject({ version: "PL-1.0.0", builtin: true, current: true });
+    for (const role of ["operator", "reviewer"]) expect((await call("POST", "/platform", { version: "PL-1.1.0", rules }, role)).status).toBe(403);
+    expect((await call("POST", "/platform", { version: "PL-1.1.0", rules: "too short" }, "agent_ops")).status).toBe(400);
+    const ok = await call("POST", "/platform", { version: "PL-1.1.0", rules: rules + " Answer in the participant's language." }, "agent_ops");
+    expect(ok.status).toBe(201);
+    expect((await call("POST", "/platform", { version: "PL-1.1.0", rules }, "admin")).status).toBe(409);   // saved versions never change
+    const after = (await call("GET", "/platform", undefined, "agent_ops")).json;
+    expect(after).toMatchObject({ current_version: "PL-1.1.0", can_edit: true });
+    expect(after.platform.map((x: { version: string }) => x.version)).toEqual(["PL-1.1.0", "PL-1.0.0"]);     // newest first
+    const ctx = (await call("GET", "/employees/VE-1.0.0/context", undefined, "reviewer")).json;
+    expect(ctx.platform_version).toBe("PL-1.1.0");
+    expect(ctx.layers[0].text).toContain("participant's language");
+    const old = (await call("GET", "/employees/VE-1.0.0/context?platform_version=PL-1.0.0", undefined, "reviewer")).json;
+    expect(old.layers[0].text).not.toContain("participant's language");
+  });
+});
+
 describe("employees over the API", () => {
   it("lists the built-in employee as current, with how many missions use it", async () => {
     const { call } = start();
@@ -635,6 +658,19 @@ describe("staff asking for a phone call on a case", () => {
     const approved = await w.call("POST", `/approvals/${item!.outbox_id}/approve`, {}, "reviewer");
     expect(approved.status).toBe(200);
     expect(approved.json).toMatchObject({ status: "sent", call: { placed: true } });
+    expect(w.port.calls).toHaveLength(1);
+  });
+
+  it("a case stuck in \"checking the answers\" can be sent back to waiting by requesting another call", async () => {
+    const w = withVoiceOn();
+    await w.call("POST", "/controls", { autonomy: { voice_call: "automatic" } }, "admin");
+    const id = await newCase(w);
+    await w.call("POST", "/missions/MSN-001-v1.3/voice-form/publish", { confirm: true }, "agent_ops");
+    await w.svc.beginSession(DEMO_TENANT, id, "t");
+    let c = await w.svc.getCase(DEMO_TENANT, id);
+    c = await w.svc.transition(DEMO_TENANT, id, c.version, "evaluating", { actor: "t", summary: "stuck" });
+    const r = await w.call("POST", `/cases/${id}/request-call`, {}, "operator");
+    expect(r.json).toMatchObject({ placed: true, message: "Calling now." });
     expect(w.port.calls).toHaveLength(1);
   });
 

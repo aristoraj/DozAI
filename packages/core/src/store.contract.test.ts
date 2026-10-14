@@ -28,6 +28,28 @@ describe.each(stores)("Store contract: %s", (_name, make) => {
     expect(results.filter(Boolean)).toHaveLength(1);
   });
 
+  it("putCampaignIf: writes only over the copy that was read, so two writers cannot undo each other", async () => {
+    const s = make();
+    const c = { campaign_id: "K1", tenant_id: "t1", name: "C", mission_version: "m", cohort: null, status: "running", per_tick: 1, daily_cap: 5, sent_day: null, sent_today: 0, sent_total: 0, created_at: "x", created_by: "u", updated_at: "x", started_at: "x", pause_reason: null, last_note: null, last_run_at: null } as never;
+    await s.putCampaign(c);
+    const read = (await s.getCampaign("t1", "K1"))!;
+    expect(await s.putCampaignIf({ ...read, status: "paused" }, read)).toBe(true);
+    expect(await s.putCampaignIf({ ...read, sent_total: 9 }, read)).toBe(false); // read before the pause: refused
+    expect((await s.getCampaign("t1", "K1"))).toMatchObject({ status: "paused", sent_total: 0 });
+    const now = (await s.getCampaign("t1", "K1"))!;
+    const both = await Promise.all([s.putCampaignIf({ ...now, sent_total: 1 }, now), s.putCampaignIf({ ...now, sent_total: 2 }, now)]);
+    expect(both.filter(Boolean)).toHaveLength(1);
+  });
+
+  it("refuses a record too large for one Data Store row, in every store, instead of failing only in production", async () => {
+    const s = make();
+    const big = "x".repeat(9_500);
+    await expect(s.putConversation({ case_id: "C-1", tenant_id: "t1", status: "asking", current: null, reasks: 0, answers: [{ question_id: "q", value: big }] as never, messages_sent: 0, last_inbound_at: null })).rejects.toThrow(/too large/);
+    await expect(s.putInbox({ inbox_id: "i1", tenant_id: "t1", source: "interakt", event: { text: big }, status: "pending", received_at: "x" })).rejects.toThrow(/too large/);
+    await expect(s.casCase({ ...mkCase("Z"), reason: big }, 0)).rejects.toThrow(/too large/);
+    await s.putConversation({ case_id: "C-2", tenant_id: "t1", status: "asking", current: null, reasks: 0, answers: [], messages_sent: 0, last_inbound_at: null }); // a normal one is fine
+  });
+
   it("keeps tenants apart", async () => {
     const s = make();
     await s.casCase(mkCase("C"), 0);

@@ -314,3 +314,41 @@ describe("one participant is never started twice", () => {
     expect(await outboxCount(w)).toBe(1);
   });
 });
+
+describe("who a campaign can reach", () => {
+  it("refuses to start with nobody to message, and says why a draft shows zero", async () => {
+    const w = await world();
+    const empty = await make(w);
+    await expect(start(w, empty.campaign_id)).rejects.toThrow(/nobody can be messaged/);
+    await load(w, 3, { cohort: "B1" });
+    const other = await make(w, { name: "Other", cohort: "B2" });
+    await expect(start(w, other.campaign_id)).rejects.toThrow(/nobody can be messaged/);
+    const first = await make(w, { name: "First", cohort: "B1" });
+    await start(w, first.campaign_id);
+    const later = await make(w, { name: "Later", cohort: "B1" });
+    const p = (await w.camps.progress(T, await w.camps.list(T))).get(later.campaign_id)!;
+    expect(p).toMatchObject({ in_mission: 3, queued: 3 });          // the first campaign has not sent yet, so all three are still free
+    await w.camps.run(T);
+    const after = (await w.camps.progress(T, await w.camps.list(T))).get(later.campaign_id)!;
+    expect(after).toMatchObject({ in_mission: 3, queued: 0, in_other_campaign: 3 });
+  });
+});
+
+describe("deleting a campaign", () => {
+  it("hides it, refuses while it is running, and leaves the people it messaged alone", async () => {
+    const w = await world();
+    await load(w, 2);
+    const draft = await make(w, { name: "Never started" });
+    await w.camps.remove(admin, draft.campaign_id);
+    expect((await w.camps.list(T)).map(c => c.name)).not.toContain("Never started");
+    await expect(w.camps.remove(admin, draft.campaign_id)).rejects.toThrow(/not found/);
+
+    const live = await make(w, { name: "Live" });
+    await start(w, live.campaign_id);
+    await expect(w.camps.remove(admin, live.campaign_id)).rejects.toThrow(/pause or stop/);
+    await w.camps.run(T);                                           // both people fit in one batch, so it finishes
+    await w.camps.remove(admin, live.campaign_id);
+    expect(await w.camps.list(T)).toHaveLength(0);
+    expect((await statuses(w)).waiting).toBe(2);                    // the two people it messaged are untouched
+  });
+});
