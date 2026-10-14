@@ -159,12 +159,12 @@ export function requirementProblems(reqs: Requirement[], i: Instrument): string[
 }
 
 /** Everything wrong with a mission definition, in plain words. Empty means it can be saved. */
-export function missionProblems(input: MissionInput): string[] {
+export function missionProblems(input: MissionInput, opts: { builtInOk?: boolean } = {}): string[] {
   const out: string[] = [];
   const keys = new Set<string>();
   for (const t of input.templates) { if (keys.has(t.key)) out.push(`template "${t.key}" is listed twice`); keys.add(t.key); }
   if (!keys.has(input.intro_template)) out.push(`intro_template "${input.intro_template}" is not in the templates list`);
-  if (input.version === PLACEMENT_RETENTION_V1.version) out.push("that version name belongs to the built-in mission");
+  if (input.version === PLACEMENT_RETENTION_V1.version && !opts.builtInOk) out.push("that version name belongs to the built-in mission");
   out.push(...requirementProblems(input.evidence_requirements ?? [], input.instrument as Instrument));
   const p = input.policy;
   if (p?.windowStartHour !== undefined && p?.windowEndHour !== undefined && p.windowStartHour >= p.windowEndHour) out.push("the contact window must end after it starts");
@@ -202,9 +202,9 @@ export function bundleFromInput(input: MissionInput, by: string, now: Date): Mis
 }
 
 /** Parse, check and build in one step. Throws a list of plain problems. */
-export function parseMission(raw: unknown, by: string, now: Date): { bundle?: MissionBundle; problems: string[] } {
+export function parseMission(raw: unknown, by: string, now: Date, opts: { builtInOk?: boolean } = {}): { bundle?: MissionBundle; problems: string[] } {
   const parsed = MissionInputSchema.safeParse(raw);
   if (!parsed.success) return { problems: parsed.error.issues.map(i => `${i.path.join(".") || "mission"}: ${i.message}`) };
-  const problems = missionProblems(parsed.data);
+  const problems = missionProblems(parsed.data, opts);
   return problems.length ? { problems } : { bundle: bundleFromInput(parsed.data, by, now), problems: [] };
 }

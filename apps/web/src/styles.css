@@ -836,3 +836,74 @@ input[type="checkbox"]:disabled { opacity: .5; cursor: not-allowed; }
 .danger-zone { padding-top: 18px; border-top: 1px solid var(--line); }
 @media (prefers-reduced-motion: reduce) { .drawer-panel:not([hidden]) { animation: none; } .summary-bar span { transition: none; } }
 @media (max-width: 480px) { .kv-row { grid-template-columns: 1fr; gap: 2px; } .sim-row { flex-direction: column; align-items: stretch; } }
+
+/* ---- the question editor (questions.js): one card per question, WhatsApp and phone side by side ---- */
+.q-editor { display: grid; gap: 12px; }
+.q-list { display: grid; gap: 12px; }
+.q-card { border: 1px solid var(--line); border-radius: 14px; background: var(--white); padding: 14px; display: grid; gap: 12px; min-width: 0; }
+.q-card.editing { border-color: var(--teal-dark); box-shadow: 0 0 0 3px rgba(44, 119, 113, 0.12); }
+.q-head { display: flex; align-items: flex-start; gap: 12px; min-width: 0; flex-wrap: wrap; }
+.q-num { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 9px; background: var(--teal-soft); color: var(--teal-dark); font-size: var(--fs-sm); font-weight: 800; }
+.q-meta { flex: 1 1 180px; min-width: 0; display: grid; gap: 2px; }
+.q-meta strong { color: var(--ink); font-size: var(--fs-sm); font-weight: 700; }
+.q-meta small { color: var(--muted); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.q-meta code { font-size: var(--fs-xs); }
+.q-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+.q-sure { color: var(--ink); font-size: var(--fs-sm); font-weight: 700; }
+.q-channels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.q-channel { min-width: 0; padding: 11px 12px; border-radius: 11px; background: var(--surface); }
+.q-channel h4 { display: flex; align-items: center; gap: 7px; margin: 0 0 6px; color: var(--muted); font-size: var(--fs-xs); font-weight: 800; text-transform: uppercase; letter-spacing: var(--ls-caps); }
+.q-channel h4 em { margin-left: auto; font-style: normal; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--teal-dark); }
+.q-channel p { margin: 0; color: var(--ink); font-size: var(--fs-md); line-height: 1.5; overflow-wrap: anywhere; }
+.q-dot { width: 8px; height: 8px; border-radius: 50%; }
+.q-dot.wa { background: var(--teal-dark); }
+.q-dot.ph { background: var(--coral-dark); }
+.q-opts { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }
+.q-opts li { display: flex; gap: 8px; align-items: baseline; color: var(--body); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.q-opts li span { flex: none; display: inline-grid; place-items: center; min-width: 18px; height: 18px; border-radius: 6px; background: var(--white); border: 1px solid var(--line); color: var(--muted); font-size: var(--fs-xs); font-weight: 700; }
+.q-form { display: grid; gap: 14px; }
+.q-form textarea { width: 100%; resize: none; }
+.q-legend { color: var(--ink); font-size: var(--fs-sm); font-weight: 800; }
+.q-legend small { margin-left: 6px; color: var(--muted); font-weight: 400; }
+.q-opt-input { width: 100%; }
+.q-check { display: flex; align-items: center; gap: 10px; color: var(--ink); font-size: var(--fs-sm); cursor: pointer; }
+.q-warn { margin: 0; padding: 9px 12px; border-radius: 10px; background: #fae6e3; color: var(--red); font-size: var(--fs-sm); line-height: 1.5; }
+.q-form-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.q-problems { padding: 12px 14px; border-radius: 12px; background: #fae6e3; color: var(--red); font-size: var(--fs-sm); line-height: 1.5; }
+.q-problems ul { margin: 6px 0 0; padding-left: 20px; }
+.q-ok { margin: 0; color: var(--teal-dark); font-size: var(--fs-sm); font-weight: 600; }
+.q-add-button { justify-self: start; }
+.q-add { border-style: dashed; }
+@media (max-width: 720px) { .q-channels { grid-template-columns: minmax(0, 1fr); } .q-actions { margin-left: 0; width: 100%; } }
+
+/* ---- loading (busy.js): one spinner, one bar, one rule for every button ---- */
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes busyIn { to { width: 14px; margin-right: 0; opacity: 1; } }
+@keyframes busyPulse { 50% { opacity: .35; } }
+.spinner { display: inline-block; flex: none; box-sizing: border-box; width: 14px; height: 14px; border: 2px solid var(--line); border-top-color: var(--teal-dark); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; }
+.loading-line { display: flex; align-items: center; gap: 8px; margin: 0; }
+.loading-state { display: grid; justify-items: center; gap: 8px; }
+.loading-state .spinner { width: 22px; height: 22px; border-width: 3px; }
+/* A held button: guarded at once, spinner after a short delay so quick actions do not flash. */
+.button.is-busy { pointer-events: none; cursor: progress; }
+.button.is-busy:disabled { opacity: 1; }
+.button.is-busy::before { content: ""; flex: none; box-sizing: border-box; width: 0; height: 14px; margin-right: -7px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; opacity: 0; animation: busyIn .15s ease .25s forwards, spin .8s linear .25s infinite; }
+.top-progress { position: fixed; inset: 0 0 auto 0; z-index: 2000; height: 3px; pointer-events: none; }
+.top-progress[hidden] { display: none; }
+.top-progress::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 35%; background: var(--teal-dark); animation: studioSlide 1.3s ease-in-out infinite; }
+.top-progress-hint { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); padding: 7px 14px; border-radius: 999px; background: var(--ink); color: var(--white); font-size: var(--fs-sm); font-weight: 600; white-space: nowrap; }
+.top-progress-hint[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation: busyPulse 1.4s ease-in-out infinite; border-top-color: var(--teal-dark); }
+  .button.is-busy::before { animation: busyIn .01s linear .25s forwards, busyPulse 1.4s ease-in-out .25s infinite; }
+  .top-progress::before { animation: none; width: 100%; opacity: .5; }
+}
+@media (max-width: 720px) { .top-progress-hint { top: 78px; max-width: calc(100vw - 32px); white-space: normal; text-align: center; } }
+
+/* ---- categories and the read-only phone wording (questions.js) ---- */
+.q-group { display: grid; gap: 10px; }
+.q-group + .q-group { margin-top: 6px; }
+.q-group-title { display: flex; align-items: center; gap: 8px; margin: 6px 0 0; color: var(--ink); font-size: var(--fs-md); font-weight: 800; }
+.q-group-title span { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--teal-soft); color: var(--teal-dark); font-size: var(--fs-xs); font-weight: 800; }
+.q-fixed { margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--surface); color: var(--body); font-size: var(--fs-md); line-height: 1.5; overflow-wrap: anywhere; }
+.q-fixed-note { margin: 0; color: var(--muted); font-size: var(--fs-sm); }

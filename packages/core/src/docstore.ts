@@ -227,6 +227,16 @@ export class DocStore implements Store {
     for (let i = 0; i < parts.length; i++) await this.d.insert(this.row(part, tenant, id, hash, i + 1, { s: parts[i] }, `${part}|${tenant}|${id}|${hash}|${i + 1}`));
     return this.d.insert(this.row(head, tenant, id, hash, 1, { ...summary, parts: parts.length, hash }));
   }
+  /** A new head row on top of the old one (the latest head wins); the new pieces are written first. Refuses when the stored document is approved (check) or another writer got there first. */
+  private async replaceBlob(head: string, part: string, tenant: string, id: string, value: unknown, summary: Record<string, unknown>): Promise<boolean> {
+    const cur = (await this.d.select({ tenant_id: tenant, collection: head, doc_id: id, latestOnly: true }))[0];
+    const text = JSON.stringify(value);
+    const hash = createHash("sha256").update(text).digest("hex").slice(0, 16);
+    const parts: string[] = [];
+    for (let i = 0; i < text.length; i += MISSION_PART) parts.push(text.slice(i, i + MISSION_PART));
+    for (let i = 0; i < parts.length; i++) await this.d.insert(this.row(part, tenant, id, hash, i + 1, { s: parts[i] }, `${part}|${tenant}|${id}|${hash}|${i + 1}`)); // an identical piece may already exist: that is fine
+    return this.d.insert(this.row(head, tenant, id, hash, (cur?.version ?? 0) + 1, { ...summary, parts: parts.length, hash }));
+  }
   private async getBlob<T>(head: string, part: string, tenant: string, id: string): Promise<T | undefined> {
     const h = (await this.d.select({ tenant_id: tenant, collection: head, doc_id: id, latestOnly: true }))[0];
     if (!h) return undefined;
@@ -248,6 +258,11 @@ export class DocStore implements Store {
     await this.d.deleteWhere({ tenant_id: t, collection: "voiceform", doc_id: v });
   }
   putMission(t: string, m: MissionBundle) { return this.putBlob("mission", "mpart", t, m.version, m, { version: m.version, name: m.name }); }
+  async replaceMission(t: string, m: MissionBundle) {
+    const cur = await this.getBlob<MissionBundle>("mission", "mpart", t, m.version);
+    if (cur && !cur.instrument.draft) return false;
+    return this.replaceBlob("mission", "mpart", t, m.version, m, { version: m.version, name: m.name });
+  }
   getMission(t: string, version: string) { return this.getBlob<MissionBundle>("mission", "mpart", t, version); }
   listMissions(t: string) { return this.listBlobs<MissionBundle>("mission", "mpart", t); }
 

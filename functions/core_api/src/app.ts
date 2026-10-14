@@ -5,7 +5,7 @@ import { timingSafeEqual } from "node:crypto";
 import { DeleteCaseInputSchema, ImportInputSchema, MissionBriefSchema, ReviewDecisionInputSchema, RunAgentInputSchema, ROLES, type CaseRecord, type Principal, type Role } from "@dozai/contracts";
 import type { EmployeeDefinition, MissionDrafter } from "@dozai/core";
 import { draftMission, ScriptedMissionDrafter } from "@dozai/core";
-import { GatewayTools, ACTION_KINDS, ACTION_LABELS, actionKindOf, approvalStats, MEMORY_SPEC, replaySession, type OutboxItem, buildAgentContext, buildVoiceForm, voiceFormHash, CampaignService, CaseService, ConversationRunner, evaluateRequirements, questionById, DozaiError, DEMO_TENANT, InMemoryStore, importParticipants, seedDemo, type CampaignAction, type MissionBundle } from "@dozai/core";
+import { checkMissionDefinition, phoneWordingProblems, GatewayTools, ACTION_KINDS, ACTION_LABELS, actionKindOf, approvalStats, MEMORY_SPEC, replaySession, type OutboxItem, buildAgentContext, buildVoiceForm, voiceFormHash, CampaignService, CaseService, ConversationRunner, evaluateRequirements, questionById, DozaiError, DEMO_TENANT, InMemoryStore, importParticipants, seedDemo, type CampaignAction, type MissionBundle } from "@dozai/core";
 import { dispatchVoice, syncCalls, FakeChannels, FakeVoice, matchSignatureVariant, processInbox, processVoiceInbox, recordRejected, storeInteraktEvent, storeVoiceCallback, tick, type VoiceDispatchConfig, type VoicePort, type AgentRuntimePort, type ChannelPort } from "@dozai/adapters";
 import { auditView, caseView } from "./views";
 
@@ -239,18 +239,31 @@ export function createApp(deps: AppDeps) {
     res.json({ deleted: true, version });
   }));
 
-  // Signing off the wording: saves the same mission as a new version whose questionnaire is approved, recording who did it and when.
-  // A saved mission never changes, so people already on the old version stay on it. New participants and campaigns use the newest.
+  // Signing off the wording approves the SAME mission: same version, no second mission. It records who did it and when. The questions may have
+  // been edited on the way; they are checked like a new draft. After this the mission is approved and never changes again: a later change is a
+  // new version, as for any approved mission.
   app.post("/api/missions/:version/sign-off", need("admin"), wrap(async (req, res) => {
     if (req.body?.confirm !== true) throw new DozaiError("CONFIRMATION_REQUIRED", "send {\"confirm\": true} after reading the wording", 400);
     const { svc } = req.ctx; const t = req.principal!.tenant_id;
     const m = await svc.getMission(t, String(req.params.version));
     if (!m.instrument.draft) throw new DozaiError("ALREADY_SIGNED_OFF", "this wording is already signed off", 409);
-    const taken = new Set((await svc.listMissions(t)).map(x => x.version));
-    let version = `${m.version}-signed`; for (let n = 2; taken.has(version); n++) version = `${m.version}-signed${n}`;
-    const made = await svc.createMission(req.principal!, { ...definitionOf(m), version, instrument: { ...m.instrument, draft: false } });
-    res.status(201).json({ mission: { ...missionView(svc, made), employee: await employeeInfo(svc, made) } });
+    // Only the questions and what to find out can change here. Who signed and when is set by the platform whatever the request says.
+    const edits = req.body?.edits as { instrument?: Record<string, unknown>; evidence_requirements?: unknown } | undefined;
+    const def = { ...definitionOf(m), instrument: { ...m.instrument, draft: false } } as Record<string, unknown>;
+    if (edits && typeof edits === "object") {
+      if (edits.instrument && typeof edits.instrument === "object") def.instrument = { ...edits.instrument, version: m.instrument.version, draft: false };
+      if (Array.isArray(edits.evidence_requirements)) def.evidence_requirements = edits.evidence_requirements;
+      // The phone wording is fixed: editing the written questions must leave what is said on a call exactly as it was.
+      const problems = [...checkMissionDefinition(def).problems, ...phoneWordingProblems(m.instrument, def.instrument as typeof m.instrument)];
+      if (problems.length) throw new DozaiError("INVALID_MISSION", problems.slice(0, 6).join(" "), 400);
+    }
+    const signed = await svc.signOffMission(req.principal!, m.version, def);
+    res.json({ mission: { ...missionView(svc, signed), employee: await employeeInfo(svc, signed) } });
   }));
+
+  // Checks a mission definition without saving it, for the question editor: what is wrong in plain words, and what the voice agent would say
+  // for each question. Nothing is stored and no model is called.
+  app.post("/api/missions/check", need("read"), wrap(async (req, res) => { res.json(checkMissionDefinition(req.body)); }));
 
   // Mission Studio: a plain-language brief in, a draft mission out. Nothing is saved: a person reads the draft, saves it as a draft
   // mission, and later signs the wording off. The drafter sees the brief only, never anything about a person.
