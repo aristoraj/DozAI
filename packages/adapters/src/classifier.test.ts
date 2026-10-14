@@ -103,6 +103,7 @@ describe("what the model is told", () => {
     expect(system).toContain("untrusted");
     expect(system).toContain("never write messages");
     expect(system).toContain("copied character for character");
+    expect(system).toContain("I am planning to change jobs");
   });
 
   it("the reply is quoted as data, the request has a fixed schema, and the model has no tools", async () => {
@@ -266,6 +267,18 @@ describe("nothing the model returns is trusted without a check", () => {
   it("an option the rules matched exactly stays, even if the model reads the extra words as nothing", async () => {
     const res = await reader({ intent: "unclear", confidence: 0.4 }).classify(input("not working, honestly it has been a long road", status));
     expect(res).toMatchObject({ intent: "answer", value: "not_employed" });
+  });
+
+  it("a yes/no the rules only inferred from a sentence gives way when the model finds it unclear", async () => {
+    const res = await reader({ intent: "unclear", confidence: 0.5 }).classify(input("I don't think I want anything right now", support));
+    expect(res.intent).toBe("unclear");
+  });
+
+  it("the model reads a yes/no from a sentence: 'I am planning to change jobs' is No", async () => {
+    const changed = { id: "q_changed", module: "status", type: "yesno", evidence_key: "changed_job", text: "Have you changed jobs since your training?" } as never;
+    const instrument = { ...DRAFT_INSTRUMENT, questions: [...DRAFT_INSTRUMENT.questions, changed] };
+    const r = reader({ intent: "answer", answers: [ans("changed_job", "I am planning to change jobs", 0.85, { option_key: "2" })], confidence: 0.85 });
+    expect(await r.classify(input("I am planning to change jobs", changed, { instrument }))).toMatchObject({ intent: "answer", value: "no" });
   });
 
   it("if the model is down, the rule result is used, including its answer to a text question", async () => {
