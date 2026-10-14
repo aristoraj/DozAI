@@ -7,6 +7,15 @@ import { api, loadAll } from "../../lib/api.js";
 import { toast } from "../../components/toast.js";
 
 // ---- add a mission (administrators) -----------------------------------------------------------------------------------------------------
+/** Options for choosing an employee: follow one (its newest version) or pin one exact version. */
+export function employeeChoices(selected) {
+  const ids = [...new Set(state.employees.map(e => e.employee_id))];
+  return ids.map(id => {
+    const mine = state.employees.filter(e => e.employee_id === id), cur = mine.at(-1);
+    return `<optgroup label="${esc(cur.name)} (${esc(id)})"><option value="${esc(id)}" ${selected === id ? "selected" : ""}>Follow ${esc(cur.name)}: always the newest version</option>${mine.map(e => `<option value="${esc(id)}|${esc(e.version)}" ${selected === id + "|" + e.version ? "selected" : ""}>Pin ${esc(e.version)}</option>`).join("")}</optgroup>`;
+  }).join("");
+}
+
 export function openMissionModal(prefill) {
   const s = { text: prefill ?? "", from: state.missionShown?.version ?? state.defaultMission, error: null, running: false };
   const draw = () => {

@@ -29,8 +29,8 @@ export async function loadAll() {
   try {
     // Configuration can change between deploys, so re-read it each time instead of trusting a stale tab.
     [state.me, state.mission] = await Promise.all([api("/me"), api("/mission")]);
-    const [c, a, s, ss, ms, cp, em, ap, co, vo] = await Promise.all([api("/cases"), api("/audit?limit=300"), api("/summary"), api("/sessions"), api("/missions"), api("/campaigns"), api("/employees"), api("/approvals"), api("/controls"), api("/voice")]);
-    Object.assign(state, { cases: c.cases, audits: a.events.map(withIst), summary: s, sessions: ss.sessions, missions: ms.missions, defaultMission: ms.default_version, campaigns: cp.campaigns, employees: em.employees, employeeCanEdit: em.can_edit, approvals: ap.approvals, approvalsWaiting: ap.waiting, controlsInfo: co, voice: vo, error: null, loaded: true });
+    const [c, a, s, ss, ms, cp, em, ap, co, vo, pf] = await Promise.all([api("/cases"), api("/audit?limit=300"), api("/summary"), api("/sessions"), api("/missions"), api("/campaigns"), api("/employees"), api("/approvals"), api("/controls"), api("/voice"), api("/platform")]);
+    Object.assign(state, { cases: c.cases, audits: a.events.map(withIst), summary: s, sessions: ss.sessions, missions: ms.missions, defaultMission: ms.default_version, campaigns: cp.campaigns, employees: em.employees, employeeCanEdit: em.can_edit, approvals: ap.approvals, approvalsWaiting: ap.waiting, controlsInfo: co, voice: vo, platform: pf, error: null, loaded: true });
     if (state.missionShown && !state.missions.some(m => m.version === state.missionShown.version)) state.missionShown = null;
   } catch (e) {
     state.error = e.message; state.loaded = true;

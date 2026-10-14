@@ -157,6 +157,31 @@ describe.each(stores)("a finished call on a case: %s", (_n, make) => {
     expect(ledger).not.toContain("a.example");
   });
 
+  it("a call that connected but gave no answers goes back to waiting, so the case is not stuck and another call can be requested", async () => {
+    const { svc, tools } = await world();
+    await placeCall(svc, tools);
+    const r = await ingestVoiceResult(svc, T, "C-1", answered({ answers: {}, transcript: "Hello? ...", duration_seconds: 60 }));
+    expect(r).toMatchObject({ applied: true, finished: false });
+    const c = await svc.getCase(T, "C-1");
+    expect(c.status).toBe("waiting");
+    expect(c.next_action).toContain("ended before any answers");
+    const k = await svc.getCase(T, "C-1");
+    const again = await tools.call(session, "voice_call_request", { case_id: "C-1", idempotency_key: "key-retry-0002", expected_version: k.version, reason: "The first call dropped." });
+    expect(again.error).toBeUndefined();
+  });
+
+  it("after a call that dropped before any answer, the person may be tried again without recorded consent; after a message with no reply, not", async () => {
+    const { svc, tools } = await world();
+    await placeCall(svc, tools);
+    await ingestVoiceResult(svc, T, "C-1", answered({ answers: {}, consent_given: undefined, identity_confirmed: undefined, duration_seconds: 60 }));
+    let c = await svc.getCase(T, "C-1");
+    c = await svc.transition(T, "C-1", c.version, "waiting", { actor: "t", summary: "second try", patch: { attempts: 1 } });
+    expect((await svc.getCase(T, "C-1")).attempts).toBe(1);
+    expect(await svc.gateContact(c)).toEqual({ allowed: true });                 // only a dropped call so far: consent was never asked
+    await svc.emit(c, "message_sent", "t", "A WhatsApp message went out");
+    expect(await svc.gateContact(c)).toMatchObject({ allowed: false, code: "CONSENT_REQUIRED" });
+  });
+
   it("applying the same result again changes nothing", async () => {
     const { svc, tools } = await world();
     await placeCall(svc, tools);

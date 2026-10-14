@@ -36,7 +36,12 @@ export function createApp(deps: AppDeps) {
   registerAdminRoutes(app, deps);
 
   // ---- errors ---------------------------------------------------------------------------------------------------------------
+  app.use("/api", (_req: Request, res: Response) => { res.status(404).json({ error: { code: "NOT_FOUND", message: "no such route" } }); });
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    // A body that is not JSON, or is too large. Not logged: the raw body can hold phone numbers or replies.
+    const type = (err as { type?: string } | null)?.type;
+    if (type === "entity.parse.failed") return res.status(400).json({ error: { code: "INVALID_JSON", message: "the request body is not valid JSON" } });
+    if (type === "entity.too.large") return res.status(413).json({ error: { code: "BODY_TOO_LARGE", message: "the request body is too large" } });
     if (err instanceof DozaiError) return res.status(err.httpStatus).json({ error: { code: err.code, message: err.message } });
     if (err instanceof ZodError) return res.status(400).json({ error: { code: "INVALID_INPUT", message: err.issues.map(i => `${i.path.join(".")}: ${i.message}`).join("; ") } });
     console.error(err);

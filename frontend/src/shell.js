@@ -19,7 +19,7 @@ import { loadWording, syncSignOff } from "./pages/missions/wording.js";
 import { ALL } from "./pages/overview/dashboard.js";
 import { act, api, loadAll } from "./lib/api.js";
 import { toast } from "./components/toast.js";
-import { openEmployeeModal, showContext, showEmployee } from "./pages/agent/employee.js";
+import { openEmployeeModal, openPlatformModal, showContext, showEmployee } from "./pages/agent/employee.js";
 import { replaySession } from "./pages/agent/sessions.js";
 import { saveControls } from "./pages/agent/controls.js";
 import { openImportModal } from "./pages/cases/import-modal.js";
@@ -50,12 +50,18 @@ export function chrome() {
   document.querySelectorAll(".nav-item").forEach(b => b.classList.toggle("active", b.dataset.view === state.view));
   render();
 }
+let lastHtml = "";
+let shownView = null; // the page fades in when it changes, not each time the same page is redrawn after a click
 export function render() {
-  if (!state.loaded) { appView.innerHTML = `<div class="view-enter">${loadingState("Loading…", "Reading the latest data.")}</div>`; return; }
-  if (state.error) { appView.innerHTML = `<div class="view-enter">${empty("Could not load data", state.error, `<button class="button primary" data-action="refresh">Try again</button>`)}</div>`; bind(); return; }
+  if (!state.loaded) { shownView = null; lastHtml = ""; appView.innerHTML = `<div class="view-enter">${loadingState("Loading…", "Reading the latest data.")}</div>`; return; }
+  if (state.error) { shownView = null; lastHtml = ""; appView.innerHTML = `<div class="view-enter">${empty("Could not load data", state.error, `<button class="button primary" data-action="refresh">Try again</button>`)}</div>`; bind(); return; }
   const views = { overview: renderOverview, cases: renderCases, campaigns: renderCampaigns, reviews: renderReviews, agent: renderAgent, approvals: renderApprovals, calls: renderCalls, missions: renderMission, audit: renderAudit };
   const off = state.controlsInfo?.controls.paused ? `<div class="agent-callout" style="border-color:#b64b48;margin-bottom:14px"><small>Switched off</small><h3>Nothing is being sent or placed, and the agent is not being woken.</h3><p>Open Claude engine, then Controls, to switch it back on.</p></div>` : "";
-  appView.innerHTML = `<div class="view-enter">${off}${views[state.view]()}</div>`;
+  const enter = shownView === state.view ? "" : "view-enter";
+  const html = `<div class="${enter}">${off}${views[state.view]()}</div>`;
+  if (!enter && html === lastHtml) return; // nothing changed: leave the page alone instead of flashing it
+  shownView = state.view; lastHtml = html;
+  appView.innerHTML = html;
   bind();
   if (state.view === "reviews" && state.reviewSelected && $("reviewConv")) fillConversation("reviewConv", state.reviewSelected);
   // The questions of an unsigned mission open by themselves: reading them is what a sign-off is based on.
@@ -90,6 +96,7 @@ function bind() {
   appView.querySelectorAll("[data-action]").forEach(el => el.addEventListener("click", () => action(el.dataset.action)));
   appView.querySelectorAll("[data-employee]").forEach(el => el.addEventListener("click", () => showEmployee(el.dataset.employee)));
   $("ctxMission")?.addEventListener("change", e => showContext(e.target.value));
+  appView.querySelectorAll("[data-platform]").forEach(el => el.addEventListener("click", () => { state.platformShown = el.dataset.platform; render(); }));
   appView.querySelectorAll("[data-camp]").forEach(el => el.addEventListener("click", () => campaignAct(el.dataset.camp, el.dataset.act)));
   $("missionPick")?.addEventListener("change", async e => {
     try { state.missionShown = await api(`/mission?version=${encodeURIComponent(e.target.value)}`); render(); } catch (err) { toast(err.message, "warning"); }
@@ -107,6 +114,7 @@ export function action(name) {
   if (name === "purge") openPurgeModal();
   if (name === "new-campaign") openCampaignModal();
   if (name === "add-employee") openEmployeeModal();
+  if (name === "add-platform") openPlatformModal();
   if (name === "voice-preview") loadVoiceForm((state.missionShown ?? state.mission).version);
   if (name === "voice-publish") {
     const m = state.missionShown ?? state.mission, update = !!state.voiceForm?.link;

@@ -1,6 +1,7 @@
 // Create a mission: the brief, the draft, and the question review.
 import { state } from "../../lib/state.js";
 import { esc } from "../../lib/format.js";
+import { employeeChoices } from "./add-modal.js";
 import { $, modal, modalBackdrop } from "../../lib/dom.js";
 import { closeModal } from "../../components/modal.js";
 import { api, loadAll } from "../../lib/api.js";
@@ -12,11 +13,12 @@ import { toast } from "../../components/toast.js";
 
 // ---- Mission Studio: write a mission as a plain brief, let the drafter structure it, read it, save it as a draft ---------------------------------------------
 export function openStudioModal() {
-  const s = { step: "brief", running: false, error: null, result: null, brief: { name: "", programme_name: "", goal: "", people: "", find_out: "", approach: "", start_from: state.defaultMission, max_attempts: "", window_start_hour: "", window_end_hour: "" } };
+  const s = { step: "brief", running: false, error: null, result: null, brief: { name: "", programme_name: "", goal: "", people: "", find_out: "", approach: "", start_from: state.defaultMission, employee: "", max_attempts: "", window_start_hour: "", window_end_hour: "" } };
   const read = () => {
     const b = s.brief, out = { name: b.name.trim(), programme_name: b.programme_name.trim(), goal: b.goal.trim(), people: b.people.trim(), find_out: b.find_out.trim() };
     if (b.approach.trim()) out.approach = b.approach.trim();
     if (b.start_from) out.start_from = b.start_from;
+    if (b.employee) { const [id, ver] = b.employee.split("|"); out.employee_id = id; if (ver) out.employee_version = ver; }
     for (const k of ["max_attempts", "window_start_hour", "window_end_hour"]) if (String(b[k]).trim() !== "") out[k] = Number(b[k]);
     return out;
   };
@@ -48,7 +50,8 @@ export function openStudioModal() {
     const b = s.brief, picked = state.missions.find(m => m.version === b.start_from);
     const ws = String(b.window_start_hour), we = String(b.window_end_hour), att = String(b.max_attempts).trim();
     const hours = ws === "" && we === "" ? "usual contact hours" : `contact ${ws === "" ? "from the usual start" : "from " + hourLabel(Number(ws))} ${we === "" ? "to the usual end" : "to " + hourLabel(Number(we))}`;
-    return `${picked ? "Using " + picked.name : "Using the standard setup"} · ${att ? att + " attempts at most" : "usual attempts"} · ${hours}`;
+    const who = b.employee ? ` · employee ${b.employee.split("|").join(" ")}` : "";
+    return `${picked ? "Using " + picked.name : "Using the standard setup"}${who} · ${att ? att + " attempts at most" : "usual attempts"} · ${hours}`;
   };
 
   const field = (id, label, hint, rows, value, key) => {
@@ -90,6 +93,7 @@ export function openStudioModal() {
           <section class="form-section"><button type="button" class="settings-toggle" id="sToggle" aria-expanded="${open}"><span><strong>Settings</strong> <span class="opt">(optional)</span><small id="sSummary">${esc(settingsSummary())}</small></span><svg class="settings-chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
             ${open ? `<div class="form-grid settings-panel">
               <div class="field full"><label for="sFrom">Use the approved first message, contact rules and employee from</label><select id="sFrom">${state.missions.map(m => `<option value="${esc(m.version)}" ${m.version === b.start_from ? "selected" : ""}>${esc(m.name)} · ${esc(m.version)}</option>`).join("")}</select><small>The first WhatsApp message must be a template approved by WhatsApp, so it is copied rather than drafted.</small></div>
+              <div class="field full"><label for="sEmp">Which employee does this mission</label><select id="sEmp"><option value="" ${!b.employee ? "selected" : ""}>The same as that mission</option>${employeeChoices(b.employee)}</select><small class="field-hint">Follow an employee to always use its newest version, or pin one exact version. Employees are set up under Claude engine.</small></div>
               <div class="field"><label for="sAtt">Most contact attempts per person</label><input id="sAtt" type="number" min="1" max="10" placeholder="Usual" value="${esc(b.max_attempts)}" /></div>
               <div class="field"><label for="sWs">Contact hours</label><div class="hours-row">${hourSelect("sWs", b.window_start_hour, "Contact hours, from")}<span>to</span>${hourSelect("sWe", b.window_end_hour, "Contact hours, until")}</div></div>
             </div>` : ""}</section>
@@ -103,6 +107,7 @@ export function openStudioModal() {
     const bind = (id, key) => $(id)?.addEventListener("input", e => { s.brief[key] = e.target.value; if (e.target.tagName === "TEXTAREA") autosize(e.target); if (counted[id]) countLine(id, e.target.value); if (id === "sAtt") $("sSummary").textContent = settingsSummary(); });
     [["sName", "name"], ["sProg", "programme_name"], ["sGoal", "goal"], ["sPeople", "people"], ["sFind", "find_out"], ["sApproach", "approach"], ["sAtt", "max_attempts"]].forEach(([id, k]) => bind(id, k));
     $("sFrom")?.addEventListener("change", e => { s.brief.start_from = e.target.value; $("sSummary").textContent = settingsSummary(); });
+    $("sEmp")?.addEventListener("change", e => { s.brief.employee = e.target.value; $("sSummary").textContent = settingsSummary(); });
     [["sWs", "window_start_hour"], ["sWe", "window_end_hour"]].forEach(([id, k]) => $(id)?.addEventListener("change", e => { s.brief[k] = e.target.value; $("sSummary").textContent = settingsSummary(); }));
     $("sToggle").addEventListener("click", () => { s.settingsOpen = !s.settingsOpen; drawBrief(); });
     $("draftS").addEventListener("click", async () => {

@@ -73,7 +73,7 @@ const SCHEMA = {
 export interface ClassifierClient { messages: { create(params: Record<string, unknown>): Promise<Anthropic.Message> } }
 
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n) : s);
-const safe = (s: string, n = 200) => clip(redactForModel(s), n); // anything about the participant that goes to the model is redacted first
+const safe = (s: string, n = 200, names: string[] = []) => clip(redactForModel(s, names), n); // anything about the participant that goes to the model is redacted first
 
 /** One field per thing the mission wants to know (an evidence key). Several questions may ask for the same key; the first one describes it. */
 function fieldsOf(ins: Instrument): Question[] {
@@ -99,9 +99,9 @@ function buildContext(i: ClassifyInput): string {
   const q = i.question!;
   const known = new Set((i.known ?? []).map(k => k.key));
   const lines: string[] = [];
-  if (i.mission?.programme || i.mission?.objective) lines.push(`Programme: ${safe(i.mission.programme ?? "", 120)}${i.mission.objective ? `. Purpose: ${safe(i.mission.objective, 200)}` : ""}`);
-  if (i.known?.length) lines.push(`Already known (do not report these again):\n${i.known.map(k => `- ${k.key}: ${safe(k.value, 80)}`).join("\n")}`);
-  if (i.recent?.length) lines.push(`Last questions and what we understood:\n${i.recent.map(r => `- Asked: ${r.question}\n  Understood: ${safe(r.answer, 80)}`).join("\n")}`);
+  if (i.mission?.programme || i.mission?.objective) lines.push(`Programme: ${safe(i.mission.programme ?? "", 120, i.names)}${i.mission.objective ? `. Purpose: ${safe(i.mission.objective, 200, i.names)}` : ""}`);
+  if (i.known?.length) lines.push(`Already known (do not report these again):\n${i.known.map(k => `- ${k.key}: ${safe(k.value, 80, i.names)}`).join("\n")}`);
+  if (i.recent?.length) lines.push(`Last questions and what we understood:\n${i.recent.map(r => `- Asked: ${r.question}\n  Understood: ${safe(r.answer, 80, i.names)}`).join("\n")}`);
   const others = fieldsOf(i.instrument).filter(f => f.evidence_key !== q.evidence_key && !known.has(f.evidence_key));
   lines.push(`Current question:\n${describeField(i.instrument, q, true)}${isOptionalText(q) ? "\n(This question is optional: \"no\" or \"nothing\" is a valid answer.)" : ""}`);
   if (others.length) lines.push(`Other fields this reply might also answer:\n${others.map(f => describeField(i.instrument, f, false)).join("\n")}`);
@@ -140,7 +140,7 @@ export class ClaudeReplyClassifier implements ReplyClassifier {
     if (!this.needsModel(first, i)) return first;
     try {
       const q = i.question;
-      const reply = safe(i.text, 400);
+      const reply = safe(i.text, 400, i.names);
       const res = await this.client.messages.create({
         model: this.model, max_tokens: 600, system: SYSTEM,
         output_config: { format: { type: "json_schema", schema: SCHEMA } },

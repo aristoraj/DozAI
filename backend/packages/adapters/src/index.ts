@@ -1,7 +1,7 @@
 // Adapters. Sprint 1A uses fakes only: no live WhatsApp, voice or Claude dependency.
 // Real adapters (EdZola WhatsApp, ZoLabs, Claude Managed Agents) implement the same ports in Sprint 1B.
 import type { RunAgentInput, ToolName } from "@dozai/contracts";
-import { CaseService, GatewayTools, newId, type AgentSession, type ToolResult, type ToolSession, type TraceStep, type WakeRequest } from "@dozai/core";
+import { CaseService, DozaiError, GatewayTools, newId, type AgentSession, type ToolResult, type ToolSession, type TraceStep, type WakeRequest } from "@dozai/core";
 
 // ---- Ports ------------------------------------------------------------------
 
@@ -36,6 +36,13 @@ export class FakeChannels implements ChannelPort {
     const p = await svc.store.getParticipant(tenant, c.participant_id);
     const id = `fake_${caseId}_${scenario}_${svc.now().getTime()}`;
     const A = (question_id: string, value: string, confidence = 0.85) => ({ question_id, value, confidence });
+    // The scenarios are named after the built-in placement mission. On any other mission an answering scenario answers that
+    // mission's own required questions, so no placement answer (work status, employer) is ever written into an unrelated case.
+    const mission = await svc.getMission(tenant, c.mission_version);
+    if (!isPlacementShaped(mission) && scenario !== "no_response" && scenario !== "opt_out") {
+      const keys = (mission.evidence_requirements ?? []).filter(r => r.required).map(r => r.key);
+      return svc.recordInbound(tenant, caseId, { provider_event_id: id, channel: "whatsapp", summary: "Participant answered the questions (simulated)", consent: "granted", answers: keys.map(k => A(k, "(simulated answer)")) });
+    }
     switch (scenario) {
       case "no_response": return undefined;
       case "opt_out": return svc.recordInbound(tenant, caseId, { provider_event_id: id, channel: "whatsapp", summary: "Participant replied: stop", opt_out: true });
@@ -76,10 +83,16 @@ export function scriptedJudgement(evidence: { question_id: string; value: string
   }
 }
 
+/** The built-in placement mission and missions written like it ask for a work status; the scripted stand-ins only understand those. */
+function isPlacementShaped(m: { evidence_requirements?: { key: string }[] }): boolean {
+  return !m.evidence_requirements?.length || m.evidence_requirements.some(r => r.key === "work_status");
+}
+
 export class ScriptedAgentRuntime implements AgentRuntimePort {
   constructor(private tools: GatewayTools, private channels: FakeChannels = new FakeChannels(), private employeeVersion = "1.0.0") {}
 
   async runCase(svc: CaseService, tenant: string, caseId: string, scenario: RunAgentInput["scenario"]): Promise<AgentSession> {
+    await this.gate(svc, tenant, caseId);
     const mission = await svc.getMission(tenant, (await svc.getCase(tenant, caseId)).mission_version);
     const employee = await svc.employeeFor(mission);
     const ctx: ToolSession = { session_id: newId("sesn"), tenant_id: tenant, case_id: caseId, mission_version: mission.version, employee_version: employee.version, allowed_tools: employee.allowed_tools };
@@ -115,6 +128,13 @@ export class ScriptedAgentRuntime implements AgentRuntimePort {
 
     const after = await svc.getCase(tenant, caseId);
     if (after.status === "complete") return this.finish(svc, session, "completed", "Participant opted out. No further contact.");
+    if (!isPlacementShaped(mission) && scenario !== "no_response") {
+      // Not the placement mission: this stand-in cannot judge the answers, so a complete interview goes to a person (as on resume).
+      r = await call("case_get_context", { case_id: caseId });
+      if (!(r.data as { requirements?: { complete?: boolean } } | undefined)?.requirements?.complete) return this.finish(svc, session, "idle", "Nothing to judge yet.");
+      r = await call("review_request", { case_id: caseId, idempotency_key: key(), expected_version: r.case_version, reason_code: "interview_complete", note: "Every answer this mission needs is in. A person judges them." });
+      return this.finish(svc, session, "idle", r.error ? `Stopped: review_request was refused (${r.error.code}).` : "Handed to a human reviewer.");
+    }
     const plan = DECISIONS[scenario];
     if (!plan) return this.finish(svc, session, "idle", "No reply yet. The retry window is protected by policy.");
 
@@ -123,11 +143,13 @@ export class ScriptedAgentRuntime implements AgentRuntimePort {
     const refs = ((r.data as { evidence?: { evidence_ref: string }[] })?.evidence ?? []).map(e => e.evidence_ref);
     r = await call("decision_propose", { case_id: caseId, idempotency_key: key(), expected_version: r.case_version, proposed_outcome: plan.outcome, livelihood_state: plan.state, confidence: plan.confidence, evidence_refs: refs, rationale: plan.why });
     const state = (r.data as { state?: string } | undefined)?.state;
-    return this.finish(svc, session, "idle", state === "complete" ? "Auto-completed by policy." : "Handed to a human reviewer.");
+    // Say what really happened: a refused proposal leaves the case where it was, it is not "handed to a reviewer".
+    return this.finish(svc, session, "idle", r.error ? `Stopped: decision_propose was refused (${r.error.code}).` : state === "complete" ? "Auto-completed by policy." : "Handed to a human reviewer.");
   }
 
   /** Woken after an interview or a phone call has produced evidence: read it, propose the matching outcome, and go back to sleep. */
   async resumeCase(svc: CaseService, tenant: string, caseId: string): Promise<AgentSession> {
+    await this.gate(svc, tenant, caseId);
     const mission = await svc.getMission(tenant, (await svc.getCase(tenant, caseId)).mission_version);
     const employee = await svc.employeeFor(mission);
     const ctx: ToolSession = { session_id: newId("sesn"), tenant_id: tenant, case_id: caseId, mission_version: mission.version, employee_version: employee.version, allowed_tools: employee.allowed_tools };
@@ -144,12 +166,28 @@ export class ScriptedAgentRuntime implements AgentRuntimePort {
     step("case_get_context", "MCP tool", r.error ? `${r.error.code}: ${r.error.message}` : "ok", { tool: "case_get_context", input: { case_id: caseId }, result: r.error ?? r.data, outcome: r.error ? "refused" : "executed", case_version: r.case_version });
     const evidence = ((r.data as { evidence?: { evidence_ref: string; question_id: string; value: string }[] } | undefined)?.evidence ?? []);
     const plan = scriptedJudgement(evidence);
-    if (r.error || !plan) return this.finish(svc, session, "idle", "Nothing to judge yet.");
+    if (r.error) return this.finish(svc, session, "idle", "Nothing to judge yet.");
+    if (!plan) {
+      // This stand-in only understands the built-in placement answers. For any other mission it cannot judge what was said, so once
+      // the mission has everything it needs a person decides, instead of the case waiting for a judgement that will never come.
+      const done = (r.data as { requirements?: { complete?: boolean } } | undefined)?.requirements?.complete && evidence.length > 0;
+      if (!done) return this.finish(svc, session, "idle", "Nothing to judge yet.");
+      const input = { case_id: caseId, idempotency_key: `${ctx.session_id}-review`, expected_version: r.case_version, reason_code: "interview_complete", note: "Every answer this mission needs is in. A person judges them." };
+      const v = await this.tools.call(ctx, "review_request", input);
+      step("review_request", "MCP tool", v.error ? `${v.error.code}: ${v.error.message}` : "ok", { tool: "review_request", input, result: v.error ?? v.data, outcome: v.error ? "refused" : "executed", case_version: v.case_version });
+      return this.finish(svc, session, "idle", v.error ? v.error.message : "Handed to a human reviewer.");
+    }
     const input = { case_id: caseId, idempotency_key: `${ctx.session_id}-resume`, expected_version: r.case_version, proposed_outcome: plan.outcome, livelihood_state: plan.state, confidence: plan.confidence, evidence_refs: evidence.map(e => e.evidence_ref), rationale: plan.why };
     const d = await this.tools.call(ctx, "decision_propose", input);
     step("decision_propose", "MCP tool", d.error ? `${d.error.code}: ${d.error.message}` : "ok", { tool: "decision_propose", input, result: d.error ?? d.data, outcome: d.error ? "refused" : "executed", case_version: d.case_version });
     const state = (d.data as { state?: string } | undefined)?.state;
     return this.finish(svc, session, "idle", d.error ? d.error.message : state === "complete" ? "Auto-completed by policy." : "Handed to a human reviewer.");
+  }
+
+  /** The kill switch and spend limits apply to the stand-in agent exactly as to the real one. */
+  private async gate(svc: CaseService, tenant: string, caseId: string): Promise<void> {
+    const g = await svc.agentGate(tenant, caseId);
+    if (!g.ok) throw new DozaiError(g.code, g.message, 429);
   }
 
   private async finish(svc: CaseService, session: AgentSession, status: AgentSession["status"], detail: string): Promise<AgentSession> {
@@ -164,6 +202,7 @@ export * from "./claude";
 export * from "./interakt";
 export * from "./jobs";
 export * from "./classifier";
+export * from "./responder";
 export * from "./voice";
 export * from "./zolabs-auth";
 export * from "./claude-missions";

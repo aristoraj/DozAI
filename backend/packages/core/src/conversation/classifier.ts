@@ -16,6 +16,8 @@ export interface ClassifyInput {
   known?: { key: string; value: string }[];
   /** The last few questions asked and what was understood from the replies, oldest first. */
   recent?: { question: string; answer: string }[];
+  /** The participant's own names, removed from anything sent to a model. */
+  names?: string[];
 }
 
 export interface ReplyClassifier { classify(i: ClassifyInput): Promise<Classification> }
@@ -33,10 +35,17 @@ const has = (t: string, words: string[]) => words.some(w => new RegExp(`(^|\\s)$
 const BEFORE = "(?<![\\p{L}\\p{M}\\p{N}])", AFTER = "(?![\\p{L}\\p{M}\\p{N}])";
 const word = (alts: string) => new RegExp(`${BEFORE}(?:${alts})${AFTER}`, "u");
 
-const STOP = word("stop|unsubscribe|opt ?out|do not contact|dont contact|don t contact|band karo|बंद करो|मैसेज बंद|संदेश बंद");
-const DELETION = /\b(delete|remove|erase)\b.*\b(data|details|number|information|info|records?)\b|forget me|right to be forgotten/;
+const STOP = word("stop|unsubscribe|opt ?out|do not contact|dont contact|don t contact|band karo|बंद करो|मैसेज बंद|संदेश बंद"
+  // the same request in other words people use: Hinglish ("mat bhejo", "band kar do") and plain English ("don't message me")
+  + "|mat (?:bhejo|bhejna|bhejiye)|(?:message|messages|msg|sms|whatsapp|call|phone) (?:mat|na) (?:karo|kariye|karna|bhejo|bhejna)"
+  + "|band(?:h)? (?:kar ?do|karo|kariye|kar dijiye|kardo)|(?:don t|do not|dont|never) (?:message|msg|text|contact|call|send|bother)|no more (?:messages|msgs|texts|calls)");
+// "stop" that is part of an answer, not a request to stop: "the bus stop", "had to stop working", "non-stop shifts".
+const NOT_A_STOP = /(?:bus|train|metro|auto|tempo|last|next|first|full) stop|non ?stop|(?:had|have|has) to stop|stop(?:ped)? (?:working|work|my job|the job|studying|study|going|the course)/gu;
+/** Does this reply ask us to stop contacting the person? The conversation reader and the webhook both decide with this one rule. */
+export const isStopRequest = (text: string): boolean => STOP.test(norm(text).replace(NOT_A_STOP, " "));
+const DELETION = /\b(delete|remove|erase)\b.*\b(data|details|number|information|info|records?)\b|forget me|right to be forgotten|\b(data|details|number|jaankari|jankari|records?|info)\b (delete|hata|hatao|mita|mitao|remove)\b/;
 // "I am not <someone>" means wrong person. "I am not working / interested / sure" does not.
-const WRONG_PERSON = /wrong (number|person)|\bi (am|m) not (?!(working|employed|studying|doing|interested|sure|able|looking|in |at |a |an |the |currently|now|really|yet|having|getting|going|available|well|happy|free|ready)\b)|this is not my|not the person|you have the wrong|गलत नंबर|गलत व्यक्ति/;
+const WRONG_PERSON = /wrong (number|person|no)(?![a-z])|galat (number|no|nambar|vyakti|aadmi|insaan)(?![a-z])|\bi (am|m) not (?!(working|employed|studying|doing|interested|sure|able|looking|in |at |a |an |the |currently|now|really|yet|having|getting|going|available|well|happy|free|ready)\b)|this is not my|not the person|you have the wrong|गलत नंबर|गलत व्यक्ति/;
 const DISTRESS = /suicid|kill myself|end my life|want to die|harass|abus(e|ing|ive)|threat|police|lawyer|legal action|consumer court|complain|report you|blackmail/;
 const GREETING = /^(hi|hello|hey|hii+|ok|okay|k|thanks|thank you|thx|good (morning|evening|afternoon)|namaste|namaskar|hmm+|\?|\.+|नमस्ते|नमस्कार|धन्यवाद|शुक्रिया)$/u;
 const QUESTIONISH = /\?|^(who|why|what|how|where|when|which|is this|are you|kaun|kyun|kyon|kya|kaise|kitna|कौन|क्यों|क्या|कैसे|कितना)(?![\p{L}\p{M}\p{N}])/u;
@@ -74,7 +83,7 @@ export class RuleClassifier implements ReplyClassifier {
     if (!t) return out({ intent: "off_topic", value: "no text", confidence: 0.9 }); // media, sticker, emoji only
     if (!/[\p{L}\p{N}]/u.test(t)) return out({ intent: "off_topic", confidence: 0.9 }); // only punctuation such as "???"
 
-    if (STOP.test(t)) return out({ intent: "stop" });
+    if (isStopRequest(raw)) return out({ intent: "stop" });
     if (i.context === "consent" && /^(no|nahi|nahin|नहीं|नही|ना)(?![\p{L}\p{M}])/u.test(t) && t.split(" ").length <= 3) return out({ intent: "stop" }); // a bare "No" to "May we continue?"
     if (DELETION.test(t)) return out({ intent: "deletion" });
     if (WRONG_PERSON.test(t)) return out({ intent: "wrong_person" });

@@ -1,6 +1,6 @@
 // The wake service: how a sleeping case gets looked at again. The agent never waits in a process. It sets a timer, or the
 // platform sets one (silence after a message), and a scheduler pass wakes the agent when the time comes.
-export const WAKE_REASONS = ["silence", "agent_requested", "call_followup"] as const;
+export const WAKE_REASONS = ["silence", "agent_requested", "call_followup", "evidence_ready"] as const;
 export type WakeReason = (typeof WAKE_REASONS)[number];
 
 export interface WakeRequest {
@@ -27,6 +27,7 @@ export function wakeMessage(w: Pick<WakeRequest, "reason" | "note" | "at">, case
     silence: "the participant has not replied to the last message within the follow-up time. Choose one: ask for a phone call if that is available and allowed, set a later wake-up, or ask a person to look.",
     agent_requested: `you asked to be woken now${w.note ? ` (your note: ${w.note})` : ""}. Re-read the case and decide the next step.`,
     call_followup: "a phone call has finished without enough answers. Decide what is still needed and how to get it.",
+    evidence_ready: "new answers arrived (from the interview or a phone call) at a time when you could not be woken. Judge the evidence and decide the next step.",
   };
   return `System event: wake-up on case ${caseId} (mission ${mission}): ${why[w.reason]} Read the context first.`;
 }

@@ -30,7 +30,7 @@ export function assembleMission(brief: MissionBrief, d: MissionDraft, base: Miss
   const policy = { ...(base.policy_overrides ?? {}), ...(brief.max_attempts !== undefined ? { maxAttempts: brief.max_attempts } : {}), ...(brief.window_start_hour !== undefined ? { windowStartHour: brief.window_start_hour } : {}), ...(brief.window_end_hour !== undefined ? { windowEndHour: brief.window_end_hour } : {}) };
   return {
     mission_id: ids.mission_id, version: ids.version, name: brief.name, programme_name: brief.programme_name,
-    employee_id: base.employee_id, employee_version: base.employee_version,
+    employee_id: brief.employee_id ?? base.employee_id, employee_version: brief.employee_id ? brief.employee_version : (brief.employee_version ?? base.employee_version),
     objective: d.objective, evidence_requirements: d.evidence_requirements, strategy: d.strategy, agent_guidance: d.agent_guidance,
     ...(d.outcomes?.length ? { outcomes: d.outcomes } : {}), ...(d.verdict_labels ? { verdict_labels: d.verdict_labels } : {}),
     intro_template: base.intro_template, templates: base.templates.map(t => ({ key: t.key, language: t.language, purpose: t.purpose, provider_name: t.provider_name, body_fields: t.body_fields })),

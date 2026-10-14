@@ -24,3 +24,4 @@ export * from "./agent/replay";
 export * from "./missions/studio";
 export * from "./missions/questions";
 export * from "./missions/outcomes";
+export * from "./conversation/responder";

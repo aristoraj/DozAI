@@ -34,9 +34,12 @@ export function registerVoiceRoutes(app: Express, deps: AppDeps) {
     if (req.body?.confirm !== true) throw new DozaiError("CONFIRMATION_REQUIRED", "send {\"confirm\": true} after reviewing the preview", 400);
     const { svc } = req.ctx; const t = req.principal!.tenant_id; const version = String(req.params.version);
     // One publish per mission at a time. Creating a form at ZoLabs is slow, and a second request that starts before the first has
-    // saved its form id would create a second form. The lock lasts at most five minutes if a request dies halfway.
-    const lock = `voicepub:${t}:${version}:${Math.floor(svc.now().getTime() / 300_000)}`;
-    if (!(await svc.store.claim(lock))) throw new DozaiError("PUBLISH_IN_PROGRESS", "This phone form is already being published. Wait for it to finish, then refresh the page. Publishing again now would create a duplicate form at ZoLabs.", 409);
+    // saved its form id would create a second form. The lock is per two-minute window and the previous window's lock must be free too,
+    // so a publish that started just before a boundary still holds it; a request that dies halfway blocks for at most four minutes.
+    const slot = Math.floor(svc.now().getTime() / 120_000), lock = `voicepub:${t}:${version}:${slot}`;
+    const busy = () => new DozaiError("PUBLISH_IN_PROGRESS", "This phone form is already being published. Wait for it to finish, then refresh the page. Publishing again now would create a duplicate form at ZoLabs.", 409);
+    if (!(await svc.store.claim(lock))) throw busy();
+    if (await svc.store.getIdem(`voicepub:${t}:${version}:${slot - 1}`)) { await svc.store.unclaim(lock); throw busy(); }
     try {
       const state = await voiceState(svc, t, version); // read after taking the lock, so a finished publish is seen as an existing form
       const { form_id } = await v.port.publishForm(state.definition, { existingFormId: state.link?.form_id, callbackUrl: v.callbackUrl });
@@ -94,6 +97,8 @@ export function registerVoiceRoutes(app: Express, deps: AppDeps) {
     if (c.deleted_at) throw new DozaiError("CASE_DELETED", "this case was deleted", 410);
     const actor = `${req.principal!.role}:${req.principal!.user_id}`;
     if (c.status === "draft" || c.status === "ready") c = await svc.beginSession(t, id, actor);
+    // A case stuck in "checking the answers" (an earlier call dropped and nothing was left to judge) goes back to waiting so a person can try again.
+    if (c.status === "evaluating") c = await svc.transition(t, id, c.version, "waiting", { actor, summary: "Back to waiting so another call can be placed" });
     const mission = await svc.getMission(t, c.mission_version);
     const reason = typeof req.body?.reason === "string" && req.body.reason.trim().length >= 5 ? req.body.reason.trim().slice(0, 300) : "Phone call requested by staff";
     const r = await new GatewayTools(svc).call({ session_id: `staff_${req.principal!.user_id}`.replace(/[^A-Za-z0-9_.:-]/g, "_"), tenant_id: t, case_id: id, mission_version: mission.version, employee_version: (await svc.employeeFor(mission)).version, actor }, "voice_call_request", { case_id: id, idempotency_key: `staff-${id}-${svc.now().getTime()}`, expected_version: c.version, reason });

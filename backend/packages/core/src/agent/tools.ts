@@ -5,6 +5,7 @@ import { newId } from "../storage/ledger";
 import { localHour } from "@dozai/domain";
 import { evaluateRequirements } from "../missions/requirements";
 import { planCall } from "../conversation/voice";
+import { redactForModel } from "../cases/pii";
 import { CaseService, DozaiError } from "../cases/service";
 
 /** One session maps to exactly one case and tenant. Tools cannot be pointed elsewhere. */
@@ -104,7 +105,8 @@ export class GatewayTools {
           case_id: c.case_id, participant_ref: c.participant_id, status: c.status, outcome: c.outcome,
           livelihood_state: c.livelihood_state, attempts: c.attempts,
           participant: p && { language: p.language, consent: p.consent, cohort: p.cohort, programme_record: { employer: p.recorded_employer } },
-          evidence: evidence.map(e => ({ evidence_ref: e.evidence_id, question_id: e.question_id, value: e.value, source: e.source, confidence: e.confidence })),
+          // Answers are the participant's own words: their name and any number they typed are taken out before the agent reads them.
+          evidence: evidence.map(e => ({ evidence_ref: e.evidence_id, question_id: e.question_id, value: redactForModel(e.value, p ? [p.display_name, p.first_name ?? ""] : []), source: e.source, confidence: e.confidence })),
           // Which ways of reaching the person exist, and what has been tried. No transcripts, numbers or audio.
           channels: { phone_call_available: phoneForm },
           calls: calls.map(k => ({ status: k.status, requested_at: k.requested_at, ended_at: k.ended_at ?? null, asked: k.asked })),

@@ -1,9 +1,10 @@
 // CaseService: every business operation. Claude (via tools), the API and workers all go through here.
 // Rules enforced: one door for state changes, ledger event per change, policy checks, version checks.
 import type { CaseEvent, CaseRecord, Decision, EventType, Evidence, LivelihoodState, Outcome, Participant, Principal, ReviewDecisionInput, Status } from "@dozai/contracts";
+import { PlatformInputSchema } from "@dozai/contracts";
 import { canAutoConfirm, checkContact, DEFAULT_POLICY, localHour, transitionCase, type ContactCheck, type ContactPolicy } from "@dozai/domain";
 import { GENESIS, hashEvent, newId, verifyChain, type ChainCheck } from "../storage/ledger";
-import { DEFAULT_EMPLOYEE_ID, parseEmployee, VERIFICATION_EMPLOYEE_V1, type EmployeeDefinition } from "../agent/employee";
+import { DEFAULT_EMPLOYEE_ID, parseEmployee, PLATFORM_V1, VERIFICATION_EMPLOYEE_V1, type EmployeeDefinition, type PlatformDefinition } from "../agent/employee";
 import { findingProblem, parseMission, PLACEMENT_RETENTION_V1, type MissionBundle } from "../missions/mission";
 import type { OutboxItem, ReviewTask, Store } from "../storage/store";
 import { actionKindOf, ControlsPatchSchema, defaultControls, type Controls } from "../agent/controls";
@@ -75,7 +76,7 @@ export class CaseService {
     if (version === PLACEMENT_RETENTION_V1.version) throw new DozaiError("MISSION_BUILTIN", "the built-in mission cannot be deleted", 409);
     await this.getMission(p.tenant_id, version); // 404 when it does not exist
     const cases = (await this.store.listCases(p.tenant_id)).filter(c => (c.mission_version ?? PLACEMENT_RETENTION_V1.version) === version && !c.deleted_at).length;
-    const campaigns = (await this.store.listCampaigns(p.tenant_id)).filter(c => c.mission_version === version).length;
+    const campaigns = (await this.store.listCampaigns(p.tenant_id)).filter(c => c.mission_version === version && !c.deleted_at).length;
     if (cases || campaigns) {
       const parts = [cases ? `${cases} participant${cases === 1 ? "" : "s"}` : "", campaigns ? `${campaigns} campaign${campaigns === 1 ? "" : "s"}` : ""].filter(Boolean).join(" and ");
       throw new DozaiError("MISSION_IN_USE", `${parts} use this mission, so it cannot be deleted. Delete those first, or keep the mission.`, 409);
@@ -160,6 +161,27 @@ export class CaseService {
     return this.currentEmployee(m.employee_id ?? DEFAULT_EMPLOYEE_ID);
   }
 
+  // ---- the platform layer ---------------------------------------------------------------------------------
+
+  /** The built-in rules first, then the saved versions, oldest first. */
+  async listPlatform(): Promise<PlatformDefinition[]> {
+    const saved = (await this.store.listPlatform()).sort((a, b) => (a.created_at ?? "").localeCompare(b.created_at ?? ""));
+    return [PLATFORM_V1, ...saved];
+  }
+  /** The rules in force: the newest saved version, or the built-in ones when nothing was saved. */
+  async currentPlatform(): Promise<PlatformDefinition> { return (await this.listPlatform()).at(-1)!; }
+
+  async createPlatform(p: Principal, raw: unknown): Promise<PlatformDefinition> {
+    const parsed = PlatformInputSchema.safeParse(raw);
+    if (!parsed.success) throw new DozaiError("INVALID_PLATFORM", parsed.error.issues.map(i => `${i.path.join(".") || "platform"}: ${i.message}`).slice(0, 6).join("; "), 400);
+    const input = parsed.data;
+    if (input.version === PLATFORM_V1.version) throw new DozaiError("INVALID_PLATFORM", "that version name belongs to the built-in rules", 400);
+    if (!/tool/i.test(input.rules)) throw new DozaiError("INVALID_PLATFORM", "the rules must tell the agent that it acts only through tools, or it will not know how to work", 400);
+    const def: PlatformDefinition = { ...input, created_at: this.now().toISOString(), created_by: `${p.role}:${p.user_id}` };
+    if (!(await this.store.putPlatform(def))) throw new DozaiError("PLATFORM_EXISTS", `version ${def.version} already exists. Saved rules never change: use a new version name.`, 409);
+    return def;
+  }
+
   async createEmployee(p: Principal, raw: unknown): Promise<EmployeeDefinition> {
     const { employee, problems } = parseEmployee(raw, `${p.role}:${p.user_id}`, this.now());
     if (!employee) throw new DozaiError("INVALID_EMPLOYEE", problems.slice(0, 8).join("; "), 400);
@@ -232,6 +254,14 @@ export class CaseService {
     return next;
   }
 
+  /** An interview just finished: the case stops waiting for a reply and waits for the agent to judge the answers. Safe to call twice; does nothing for a case in any other state. */
+  async beginEvaluation(tenant: string, caseId: string, actor: string): Promise<void> {
+    const c = await this.getCase(tenant, caseId);
+    if (!["running", "waiting"].includes(c.status)) return;
+    try { await this.transition(tenant, caseId, c.version, "evaluating", { actor, summary: "Interview finished: evaluating the answers", patch: { next_action: "The interview is finished. The agent is judging the answers." } }); }
+    catch (e) { if (!(e instanceof DozaiError && e.code === "VERSION_CONFLICT")) throw e; } // another writer moved the case first
+  }
+
   /** Walk legal steps to `evaluating` (used when a response or proposal arrives). */
   private async toEvaluating(c: CaseRecord, actor: string): Promise<CaseRecord> {
     if (c.status === "evaluating") return c;
@@ -259,8 +289,26 @@ export class CaseService {
     const mission = await this.getMission(c.tenant_id, c.mission_version);
     return checkContact(this.policyFor(mission), {
       now: this.now(), attempts: c.attempts, consent: p?.consent ?? "unknown",
-      optedOut: p?.consent === "declined", isFirstContact: c.attempts === 0,
+      optedOut: p?.consent === "declined", isFirstContact: c.attempts === 0 || (await this.onlyDroppedCalls(c)),
     });
+  }
+
+  /** Is it inside this case's contact hours now? Checked again when a queued message or call actually goes out, which can be much later. */
+  async insideWindow(c: { tenant_id: string; mission_version?: string }): Promise<boolean> {
+    const pol = this.policyFor(await this.getMission(c.tenant_id, c.mission_version)), h = localHour(this.now(), pol.utcOffsetMinutes);
+    return h >= pol.windowStartHour && h < pol.windowEndHour;
+  }
+
+  /**
+   * Only phone calls were tried, and none of them got an answer. Consent is asked for inside the first contact, so a call that dropped before
+   * the person could answer has not asked yet and does not use up the first contact. A message with no reply still does (the person was
+   * written to and said nothing), and the attempt limit still caps the tries.
+   */
+  private async onlyDroppedCalls(c: CaseRecord): Promise<boolean> {
+    const events = await this.store.listEvents(c.tenant_id, c.case_id);
+    const written = events.some(e => e.type === "message_sent" || e.type === "message_queued" || (e.type === "message_received" && e.payload?.channel !== "voice"));
+    const answered = events.some(e => e.type === "call_result" && Number(e.payload?.answers) > 0);
+    return !written && !answered;
   }
 
   /**
@@ -425,8 +473,8 @@ export class CaseService {
   async recordInbound(tenant: string, caseId: string, input: InboundInput): Promise<{ duplicate: boolean; case: CaseRecord }> {
     const key = `inbound:${input.channel}:${input.provider_event_id}`;
     let c = await this.getCase(tenant, caseId);
-    if (await this.store.getIdem(key)) return { duplicate: true, case: c };
-    await this.store.putIdem(key, { at: this.now().toISOString() });
+    // One atomic claim: two scheduler passes can hold the same event at once, and only one may record it.
+    if (!(await this.store.claim(key))) return { duplicate: true, case: c };
     const ev = await this.emit(c, "message_received", input.channel, input.summary, { provider_event_id: input.provider_event_id, channel: input.channel });
     const p = await this.store.getParticipant(tenant, c.participant_id);
     if (p && input.consent) await this.store.putParticipant({ ...p, consent: input.consent });
@@ -456,7 +504,7 @@ export class CaseService {
   async detectConflict(c: CaseRecord, state: string | null): Promise<{ has: boolean; reason: string }> {
     const p = await this.store.getParticipant(c.tenant_id, c.participant_id);
     const ev = await this.store.listEvidence(c.case_id);
-    const employer = ev.find(e => e.question_id === "employer_name")?.value;
+    const employer = ev.filter(e => e.question_id === "employer_name").at(-1)?.value; // the latest answer, as the requirements report reads it
     if (state === "same_job" && employer && p?.recorded_employer && norm(employer) !== norm(p.recorded_employer)) {
       return { has: true, reason: `Reported employer "${employer}" differs from the programme record "${p.recorded_employer}".` };
     }
@@ -482,12 +530,13 @@ export class CaseService {
 
     c = await this.toEvaluating(c, actor);
     const conflict = await this.detectConflict(c, input.livelihood_state);
-    const auto = (input.proposed_outcome === "confirmed" || input.proposed_outcome === "not_confirmed") && canAutoConfirm(this.policy, input.confidence, conflict.has);
+    const policy = this.policyFor(await this.getMission(tenant, c.mission_version)); // a mission may set its own, stricter threshold
+    const auto = (input.proposed_outcome === "confirmed" || input.proposed_outcome === "not_confirmed") && canAutoConfirm(policy, input.confidence, conflict.has);
     const pct = Math.round(input.confidence * 100);
     if (auto) {
       c = await this.transition(tenant, caseId, c.version, "complete", { actor: "policy-engine", outcome: input.proposed_outcome, summary: `Auto-completed at ${pct}% with no conflict`, patch: { livelihood_state: input.livelihood_state, confidence: pct, reason: input.rationale, next_action: "No action needed. Case is ready for mission reporting." } });
     } else {
-      const reason = conflict.has ? conflict.reason : `Confidence ${pct}% is below the ${Math.round(this.policy.autoConfirmAt * 100)}% auto-confirm threshold.`;
+      const reason = conflict.has ? conflict.reason : `Confidence ${pct}% is below the ${Math.round(policy.autoConfirmAt * 100)}% auto-confirm threshold.`;
       c = await this.transition(tenant, caseId, c.version, "review", { actor: "policy-engine", summary: "Sent to human review", patch: { livelihood_state: input.livelihood_state, confidence: pct, reason, next_action: "Compare the participant response with the programme record and decide." } });
       await this.openReviewTask(c, reason);
     }
@@ -524,7 +573,7 @@ export class CaseService {
 
     let next: CaseRecord;
     if (outcome) {
-      const nextAction = outcome === "confirmed" ? "No action needed. Human-reviewed outcome is final." : outcome === "inconclusive" ? "No further automation. Reporting keeps the inconclusive outcome." : "Create an opportunity-support referral per partner policy.";
+      const nextAction = outcome === "confirmed" ? "No action needed. Human-reviewed outcome is final." : outcome === "inconclusive" ? "No further automation. Reporting keeps the inconclusive outcome." : "Follow up as the programme's policy says for this result.";
       next = await this.transition(p.tenant_id, caseId, input.expected_version, "complete", { actor, outcome, summary: `Reviewer decided: ${outcome}`, patch: { confidence: outcome === "confirmed" ? Math.max(c.confidence, 90) : c.confidence, next_action: nextAction } });
     } else {
       next = await this.transition(p.tenant_id, caseId, input.expected_version, "waiting", { actor, summary: "Reviewer requested follow-up", patch: { next_action: "Send one targeted clarification using the approved template." } });
@@ -552,7 +601,14 @@ export class CaseService {
     if (c.status !== "complete") c = await this.transition(c.tenant_id, caseId, c.version, "complete", { actor, outcome: "cancelled", summary: "Cancelled because the case was deleted" });
 
     const tombstone: Participant = { participant_id: c.participant_id, tenant_id: c.tenant_id, display_name: "Deleted participant", phone_masked: "—", location: "—", cohort: person?.cohort ?? "—", language: "en", consent: "declined", recorded_employer: "—" };
-    await this.store.eraseCase({ tenant: c.tenant_id, caseId, participantId: c.participant_id, tombstone, phoneHash: person?.phone_hash });
+    // Unprocessed replies are found by number, not by case. While the same person still has an open case in another mission a reply
+    // may be meant for it, so those are kept (they are routed to that case); once no case of theirs is open they are erased too.
+    let phoneHash = person?.phone_hash;
+    if (phoneHash) {
+      const same = new Set((await this.store.listParticipants(c.tenant_id)).filter(x => x.phone_hash === phoneHash && x.participant_id !== c.participant_id).map(x => x.participant_id));
+      if ((await this.store.listCases(c.tenant_id)).some(o => same.has(o.participant_id) && !o.deleted_at && o.status !== "complete")) phoneHash = undefined;
+    }
+    await this.store.eraseCase({ tenant: c.tenant_id, caseId, participantId: c.participant_id, tombstone, phoneHash });
 
     const next: CaseRecord = { ...c, livelihood_state: null, reason: "Personal data erased.", next_action: "None. This case was deleted.", owner: "—", version: c.version + 1, deleted_at: this.now().toISOString(), deleted_by: actor, last_touch: this.now().toISOString() };
     if (!(await this.store.casCase(next, c.version))) throw new DozaiError("VERSION_CONFLICT", "case changed while deleting; try again", 409);

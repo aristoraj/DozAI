@@ -73,8 +73,11 @@ export function registerCaseRoutes(app: Express, deps: AppDeps) {
     const questions = instrument.questions;
     const sent = (await svc.store.listOutbox(t)).filter(o => o.case_id === id && o.kind === "whatsapp_text")
       .map(o => ({ at: o.created_at, from: "system" as const, text: String(o.payload.text ?? ""), delivered: o.status }));
-    const answered = (st?.answers ?? []).map(a => ({ at: a.at, from: "participant" as const, text: a.label ?? a.value, question: a.question_id }));
-    const messages = [...sent, ...answered].sort((a, b) => a.at.localeCompare(b.at));
+    // What the person actually wrote is shown as they wrote it. Cases from before that was kept show the answers that were recorded instead.
+    const wrote = (st?.transcript ?? []).map(m => ({ at: m.at, from: "participant" as const, text: m.text }));
+    const since = wrote[0]?.at;
+    const answered = (st?.answers ?? []).filter(a => !since || a.at < since).map(a => ({ at: a.at, from: "participant" as const, text: a.label ?? a.value, question: a.question_id }));
+    const messages = [...sent, ...answered, ...wrote].sort((a, b) => a.at.localeCompare(b.at));
     res.json({
       status: st?.status ?? "not_started", current: st?.current ? { id: st.current, text: questionById(instrument, st.current)?.text ?? "" } : null,
       escalation_reason: st?.escalation_reason ?? null, reasks: st?.reasks ?? 0, answered: st?.answers.length ?? 0, questions_total: questions.length, messages,

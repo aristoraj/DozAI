@@ -15,7 +15,10 @@ export const phoneDigits = (raw: string): string => raw.replace(/\D/g, "");
 /** Digits with the country code. A bare 10-digit number gets the default country code (India: 91). */
 export function normalizeMsisdn(raw: string, defaultCountryCode = "91"): string {
   const d = phoneDigits(raw).replace(/^0+/, "");
-  return d.length === 10 ? `${defaultCountryCode}${d}` : d;
+  if (d.length === 10) return `${defaultCountryCode}${d}`;
+  // "+91 098765 43210": the trunk zero written after the country code is not part of the number.
+  if (d.startsWith(defaultCountryCode) && /^0+\d{10}$/.test(d.slice(defaultCountryCode.length))) return `${defaultCountryCode}${d.slice(defaultCountryCode.length).replace(/^0+/, "")}`;
+  return d;
 }
 
 export function encryptPhone(keyB64: string, digits: string): string {
@@ -37,10 +40,13 @@ export const phoneHash = (keyB64: string, digits: string): string => createHmac(
 
 /**
  * Text that is about to go to a model: numbers that look like phone, ID or account numbers, e-mail addresses and PAN
- * numbers are replaced, so the model sees the meaning of a reply and not the details a person happened to type.
+ * numbers are replaced, so the model sees the meaning of a reply and not the details a person happened to type. `names` are
+ * the person's own names (we know them): each part is replaced as a whole word, in any case.
  */
-export function redactForModel(text: string): string {
-  return text
+export function redactForModel(text: string, names: string[] = []): string {
+  const parts = [...new Set(names.flatMap(n => n.split(/\s+/)).filter(p => p.length >= 3 && /^\p{L}+$/u.test(p)))];
+  const named = parts.reduce((t, p) => t.replace(new RegExp(`(?<!\\p{L})${p}(?!\\p{L})`, "giu"), "[name]"), text);
+  return named
     .replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, "[email]")
     .replace(/\b[A-Z]{5}\d{4}[A-Z]\b/g, "[id]")
     .replace(/(?<!\d)\+?\d[\d\s().-]{6,}\d(?!\d)/g, m => (m.replace(/\D/g, "").length >= 8 ? "[number]" : m));

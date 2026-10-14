@@ -137,3 +137,17 @@ The interview runner stays as a **guided mode** and later becomes a tool the age
 ## How we will know it works
 
 Verification rate, cost per verified case, share of cases needing a person, time to verify, opt-out and complaint rate, and how often an auto-closed case was later overturned.
+
+## The three layers are configuration (Claude engine page)
+
+What the agent is told is built from three layers, and each one is saved as data in versions that never change:
+
+| Layer | Where to edit | Who | What a new version does |
+|---|---|---|---|
+| 1. Platform rules | Claude engine, Platform tab | admin, agent operations | The newest version applies to every employee and every mission at once. The built-in `PL-1.0.0` is always there. |
+| 2. Employee | Claude engine, Employees tab (a form: new employee, or new version of one; tools are tick boxes) | admin, agent operations | A mission follows an employee's newest version, or pins an exact one. |
+| 3. Mission | Create a mission (plain language), with an Employee picker under Settings | admin | Signed off into its own immutable version. |
+
+- The platform text is data, but the real safety rules are still enforced by the gateway and the contact policy, whatever the text says. A platform version must tell the agent that it acts only through tools.
+- "What the agent is told" (Employees tab) previews the assembled text for any mission, and `?platform_version=` previews an older version. Each agent session records the platform version it ran under.
+- API: `GET/POST /api/platform`, `GET/POST /api/employees`, and `employee_id` / `employee_version` in a mission brief.

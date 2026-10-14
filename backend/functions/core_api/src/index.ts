@@ -13,7 +13,7 @@
 import type { Request } from "express";
 import { DEFAULT_POLICY, type ContactPolicy } from "@dozai/domain";
 import { CaseService, ConversationRunner, DozaiError, GatewayTools, InMemoryStore, RuleClassifier, normalizeMsisdn, seedDemo, DEMO_TENANT } from "@dozai/core";
-import { ClaudeAgentRuntime, ClaudeReplyClassifier, DEFAULT_MODEL, FakeVoice, ClaudeMissionDrafter, InteraktChannels, RefreshingToken, ScriptedAgentRuntime, ZOLABS_API_URL, ZolabsVoice, mcpOverHttp, restOverHttp } from "@dozai/adapters";
+import { ClaudeAgentRuntime, ClaudeConversationResponder, ClaudeReplyClassifier, DEFAULT_MODEL, FakeVoice, ClaudeMissionDrafter, InteraktChannels, RefreshingToken, ScriptedAgentRuntime, ZOLABS_API_URL, ZolabsVoice, mcpOverHttp, restOverHttp } from "@dozai/adapters";
 import { currentUserEmail, inviteUser, serviceFor } from "@dozai/catalyst";
 import { ROLES, type Principal, type Role } from "@dozai/contracts";
 import { createApp, type RequestContext } from "./app";
@@ -79,7 +79,7 @@ const forRequest = (req: Request): RequestContext => {
   return {
     svc,
     agent: useClaude ? new ClaudeAgentRuntime(tools, { live: liveChannel }) : new ScriptedAgentRuntime(tools),
-    runner: new ConversationRunner(svc, { classifier: useModelClassifier ? new ClaudeReplyClassifier(rules) : rules, allowDraft }),
+    runner: new ConversationRunner(svc, { classifier: useModelClassifier ? new ClaudeReplyClassifier(rules) : rules, responder: useModelClassifier ? new ClaudeConversationResponder() : undefined, allowDraft }),
   };
 };
 

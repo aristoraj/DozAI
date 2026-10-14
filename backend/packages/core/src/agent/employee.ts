@@ -12,6 +12,9 @@
 import { EmployeeInputSchema, TOOL_NAMES, type EmployeeInput, type ToolName } from "@dozai/contracts";
 import type { MissionBundle } from "../missions/mission";
 
+/** The platform layer as data: the rules every employee works under. Saved versions never change; the newest applies everywhere. */
+export interface PlatformDefinition { version: string; rules: string; note?: string; created_at?: string; created_by?: string }
+
 export interface EmployeeDefinition extends EmployeeInput {
   created_at?: string;
   created_by?: string;
@@ -32,6 +35,9 @@ How every DozAI employee works:
 - Do not claim more than the evidence shows. Say how sure you are, honestly.
 - Keep every write safe to repeat: use a fresh idempotency_key of at least 8 characters for each action, and pass the case_version you last saw as expected_version. If you get VERSION_CONFLICT, read the case again and decide again.
 - Never put personal details in a rationale. Refer to evidence by reference.`;
+
+/** The built-in platform layer: the starting point, always available, never edited in place. */
+export const PLATFORM_V1: PlatformDefinition = { version: "PL-1.0.0", rules: BASE_PROMPT, note: "Built-in starting rules." };
 
 export const VERIFICATION_EMPLOYEE_V1: EmployeeDefinition = {
   employee_id: DEFAULT_EMPLOYEE_ID,
@@ -94,6 +100,7 @@ export function parseEmployee(raw: unknown, by: string, now: Date): { employee?:
 
 export interface ContextLayer { layer: "platform" | "employee" | "mission"; title: string; text: string }
 export interface AgentContext {
+  platform_version: string;
   employee_id: string;
   employee_version: string;
   layers: ContextLayer[];
@@ -147,14 +154,14 @@ function missionText(m: MissionBundle): string {
 }
 
 /** Assemble the layers the agent is given. The case itself is read through tools and is never part of this text. */
-export function buildAgentContext(employee: EmployeeDefinition, mission: MissionBundle): AgentContext {
+export function buildAgentContext(employee: EmployeeDefinition, mission: MissionBundle, platform?: PlatformDefinition): AgentContext {
   const layers: ContextLayer[] = [
-    { layer: "platform", title: "Platform rules (every employee)", text: BASE_PROMPT },
+    { layer: "platform", title: `Platform rules (every employee)${platform ? `, ${platform.version}` : ""}`, text: platform?.rules ?? BASE_PROMPT },
     { layer: "employee", title: `${employee.name}, ${employee.employee_id} ${employee.version}`, text: employeeText(employee) },
     { layer: "mission", title: `${mission.name} ${mission.version}`, text: missionText(mission) },
   ];
   const stable = `${layers[0]!.text}\n\n${layers[1]!.text}`;
   const text = layers[2]!.text;
   const system = `${stable}\n\n${text}`;
-  return { employee_id: employee.employee_id, employee_version: employee.version, layers, stable, mission: text, system, estimated_tokens: Math.ceil(system.length / 4) };
+  return { platform_version: platform?.version ?? PLATFORM_V1.version, employee_id: employee.employee_id, employee_version: employee.version, layers, stable, mission: text, system, estimated_tokens: Math.ceil(system.length / 4) };
 }

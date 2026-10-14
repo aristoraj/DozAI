@@ -16,8 +16,8 @@ import { readFileSync, existsSync } from "node:fs";
 import { createApp } from "../backend/functions/core_api/src/app";
 import { mountMcp } from "../backend/appsail/mcp-gateway/src/server";
 import { DEFAULT_POLICY } from "@dozai/domain";
-import { CaseService, ConversationRunner, DEMO_TENANT, GatewayTools, InMemoryStore, RuleClassifier, seedDemo } from "@dozai/core";
-import { ClaudeAgentRuntime, ClaudeMissionDrafter, ClaudeReplyClassifier, FakeVoice, InteraktChannels, ScriptedAgentRuntime } from "@dozai/adapters";
+import { CaseService, ConversationRunner, DEMO_TENANT, GatewayTools, InMemoryStore, RuleClassifier, ScriptedResponder, seedDemo } from "@dozai/core";
+import { ClaudeAgentRuntime, ClaudeConversationResponder, ClaudeMissionDrafter, ClaudeReplyClassifier, FakeVoice, InteraktChannels, ScriptedAgentRuntime } from "@dozai/adapters";
 
 const PII_KEY = Buffer.alloc(32, 7).toString("base64"); // a fixed key: local numbers live in memory only and are lost on restart
 
@@ -64,7 +64,7 @@ if (flag("USE_CLAUDE") === "1" || channel) {
 async function main() {
   if (!channel) await seedDemo(store); // with real WhatsApp, no made-up number may ever be messaged: start empty
   const app = createApp({
-    forRequest: () => ({ svc, agent: useClaude ? new ClaudeAgentRuntime(tools, { live: channel }) : new ScriptedAgentRuntime(tools), runner: new ConversationRunner(svc, { classifier: useClaude ? new ClaudeReplyClassifier(new RuleClassifier()) : new RuleClassifier(), allowDraft: true }) }),
+    forRequest: () => ({ svc, agent: useClaude ? new ClaudeAgentRuntime(tools, { live: channel }) : new ScriptedAgentRuntime(tools), runner: new ConversationRunner(svc, { classifier: useClaude ? new ClaudeReplyClassifier(new RuleClassifier()) : new RuleClassifier(), responder: useClaude ? new ClaudeConversationResponder() : new ScriptedResponder(), allowDraft: true }) }),
     devAuth: true,
     pii: { key: PII_KEY, defaultCountryCode: "91" },
     voice: { port: voice, cfg: { piiKey: PII_KEY, callsEnabled: true }, tenant: DEMO_TENANT },

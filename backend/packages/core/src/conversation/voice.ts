@@ -228,17 +228,31 @@ export interface IngestResult { applied: boolean; action: "ignored" | "pending" 
  */
 export async function ingestVoiceResult(svc: CaseService, tenant: string, caseId: string, r: VoiceResult): Promise<IngestResult> {
   if (!FINAL.includes(r.status)) return { applied: false, action: "pending", finished: false, detail: "the call is not finished" };
-  if (!(await svc.store.claim(`voiceres:${tenant}:${r.communication_id}`))) return { applied: false, action: "ignored", finished: false, detail: "already applied" };
-
-  let c = await svc.getCase(tenant, caseId);
+  const claim = `voiceres:${tenant}:${r.communication_id}`;
+  if (!(await svc.store.claim(claim))) return { applied: false, action: "ignored", finished: false, detail: "already applied" };
   const prior = await svc.store.getCall(tenant, r.communication_id);
+  try {
+    return await applyVoiceResult(svc, tenant, caseId, r, prior);
+  } catch (e) {
+    // Something failed halfway (a concurrent change to the case, a store error). Give the result back so the next sync applies it:
+    // otherwise the call looks finished and is never asked about again. A second pass records the answers once (recordInbound is keyed by the call).
+    if (prior) await svc.store.putCall(prior);
+    await svc.store.unclaim(claim);
+    throw e;
+  }
+}
+
+async function applyVoiceResult(svc: CaseService, tenant: string, caseId: string, r: VoiceResult, prior: CallRecord | undefined): Promise<IngestResult> {
+  let c = await svc.getCase(tenant, caseId);
   const record: CallRecord = {
     communication_id: r.communication_id, tenant_id: tenant, case_id: caseId, form_id: prior?.form_id ?? 0, requested_at: prior?.requested_at ?? svc.now().toISOString(),
     asked: prior?.asked ?? [], reason: prior?.reason, scheduled_for: prior?.scheduled_for, started_at: prior?.started_at,
     status: r.status, ended_at: r.ended_at ?? svc.now().toISOString(), duration_seconds: r.duration_seconds ?? null, audio_url: r.audio_url ?? null, recording: r.has_recording ?? !!r.audio_url, transcript: r.transcript ?? null,
   };
+  // A deleted case's call record was erased with it: a late result must not write the transcript and audio back.
+  if (c.deleted_at) return { applied: true, action: "ignored", finished: false, detail: "the case was deleted" };
   await svc.store.putCall(record);
-  if (c.deleted_at || c.status === "complete") return { applied: true, action: "ignored", finished: false, detail: "the case is closed" };
+  if (c.status === "complete") return { applied: true, action: "ignored", finished: false, detail: "the case is closed" };
 
   const mission = await svc.getMission(tenant, c.mission_version);
   // Consent, identity and language are not answers to the mission's questions, so they are not counted as such.
@@ -262,6 +276,8 @@ export async function ingestVoiceResult(svc: CaseService, tenant: string, caseId
   if (r.identity_confirmed === false) {
     await svc.recordInbound(tenant, caseId, { provider_event_id: r.communication_id, channel: "voice", summary: "The call reached someone other than the participant" });
     c = await svc.getCase(tenant, caseId);
+    // A call that was scheduled for later is still call_scheduled here, and review is only reached through calling.
+    if (c.status === "call_scheduled") c = await svc.transition(tenant, caseId, c.version, "calling", { actor: "zolabs", summary: "Call connected" });
     if (!["review", "complete"].includes(c.status)) await svc.requestReview(tenant, caseId, c.version, "identity_mismatch", "The call reached someone other than the participant.", "zolabs");
     return { applied: true, action: "wrong_person", finished: false };
   }
@@ -296,6 +312,12 @@ export async function ingestVoiceResult(svc: CaseService, tenant: string, caseId
   // Hand the case to the agent: from calling (or a call that was scheduled and has now happened) to evaluating.
   c = await svc.getCase(tenant, caseId);
   if (c.status === "call_scheduled") c = await svc.transition(tenant, caseId, c.version, "calling", { actor: "zolabs", summary: "Call connected" });
+  // A call that connected but gave nothing to judge (it dropped, or the person hung up early) is not a finished interview. Nobody wakes the
+  // agent for it, so moving to evaluating would leave the case stuck there. It goes back to waiting, where another call or message can follow.
+  if (c.status === "calling" && !answers.length) {
+    await svc.transition(tenant, caseId, c.version, "waiting", { actor: "zolabs", summary: "The call ended before any answers were collected", patch: { next_action: "The call ended before any answers were collected. Request another call, or wait for the follow-up." } });
+    return { applied: true, action: "no_answer", finished: false, detail: "the call gave no answers" };
+  }
   if (c.status === "calling") await svc.transition(tenant, caseId, c.version, "evaluating", { actor: "zolabs", summary: "Call finished: evaluating the answers" });
   return { applied: true, action: "answered", finished: answers.length > 0 };
 }

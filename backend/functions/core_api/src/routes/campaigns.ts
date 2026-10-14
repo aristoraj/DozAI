@@ -31,6 +31,11 @@ export function registerCampaignRoutes(app: Express, deps: AppDeps) {
 
   app.post("/api/campaigns/run-now", need("intake"), wrap(async (req, res) => res.json(await campaignPass(req))));
 
+  app.post("/api/campaigns/:id/delete", need("intake"), wrap(async (req, res) => {
+    await new CampaignService(req.ctx.svc).remove(req.principal!, String(req.params.id));
+    res.json({ deleted: true, campaign_id: String(req.params.id) });
+  }));
+
   app.post("/api/campaigns/:id/:action", need("intake"), wrap(async (req, res) => {
     const { svc } = req.ctx; const t = req.principal!.tenant_id;
     const action = String(req.params.action) as CampaignAction;

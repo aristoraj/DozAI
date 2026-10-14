@@ -92,26 +92,42 @@ export async function tick(
     if (g.ok) return true;
     if (g.code === "CASE_BUDGET_REACHED") {
       const c = await svc.store.getCase(tenant, caseId);
-      if (c && ["running", "waiting"].includes(c.status)) await svc.requestReview(tenant, caseId, c.version, "case_budget", g.message, "policy-engine");
+      // Another pass may hand it over at the same moment: that is fine, and must not stop this pass.
+      try { if (c && ["running", "waiting"].includes(c.status)) await svc.requestReview(tenant, caseId, c.version, "case_budget", g.message, "policy-engine"); }
+      catch (e) { console.error("case budget handover", caseId, (e as Error).message); }
       return false;
     }
     held_back = g.message;
     return false;
   };
+  // Answers that cannot be judged in this pass (the kill switch, the daily limit, or more than this pass may handle) become a timer
+  // that is already due, so a later pass wakes the agent for them. Nothing else would bring the agent back to these cases.
+  const later = async (caseId: string, afterMs = 0) => {
+    const c = await svc.store.getCase(tenant, caseId);
+    if (c && !c.deleted_at && ["waiting", "running", "evaluating"].includes(c.status)) await svc.scheduleWake(c, { at: new Date(svc.now().getTime() + afterMs), reason: "evidence_ready", by: "scheduler" });
+  };
   if (deps.agent.resumeCase) {
     for (const w of wake) {
-      if (resumed.length + resume_errors.length >= max) break;
-      if (held_back) break;
       if (!(await svc.store.claim(`resume:${w.case_id}:${w.key}`))) continue; // someone else already woke it
-      if (!(await allowed(w.case_id))) continue;
+      if (held_back || resumed.length + resume_errors.length >= max) { await later(w.case_id); continue; }
+      if (!(await allowed(w.case_id))) { if (held_back) await later(w.case_id); continue; }
       try {
         await deps.agent.resumeCase(svc, tenant, w.case_id);
         resumed.push(w.case_id);
+        // The interview was finished and the agent looked at it but reached no decision: do not leave the case waiting on nothing.
+        // One more try a little later (the model may have misread), then a person decides.
+        const after = await svc.store.getCase(tenant, w.case_id);
+        if (after && after.status === "evaluating") {
+          if (await svc.store.claim(`nodecision:${w.case_id}:1`)) await later(w.case_id, 5 * 60_000);
+          else { try { await svc.requestReview(tenant, w.case_id, after.version, "no_decision", "The interview finished, but the agent did not reach a decision. A person should look.", "policy-engine"); } catch (e2) { console.error("no-decision handover", w.case_id, (e2 as Error).message); } }
+        }
       } catch (e) {
         const msg = (e as Error).message.slice(0, 160);
         resume_errors.push({ case_id: w.case_id, error: msg });
         const c = await svc.store.getCase(tenant, w.case_id);
-        if (c) await svc.emit(c, "agent_session_ended", "system", `Automatic resume failed: ${msg}. Use "Resume after reply".`, {});
+        // One more try by a later pass (the model may be briefly down). If that fails too, the case goes to a person (below).
+        try { await later(w.case_id, 10 * 60_000); } catch (e2) { console.error("retry wake", w.case_id, (e2 as Error).message); }
+        if (c) await svc.emit(c, "agent_session_ended", "system", `Automatic resume failed: ${msg}. It is tried again in a few minutes, or use "Resume after reply".`, {});
       }
     }
   }
@@ -126,8 +142,13 @@ export async function tick(
       if (!c || c.deleted_at || !["waiting", "running", "evaluating"].includes(c.status)) { await finish("skipped", `case is ${c?.deleted_at ? "deleted" : c?.status ?? "gone"}`); continue; }
       if (t.reason === "silence" && (await svc.store.listEvents(tenant, t.case_id)).some(e => e.type === "message_received" && e.seq > t.baseline_seq)) { await finish("skipped", "the person replied"); continue; }
       if ((await svc.wakesUsed(tenant, t.case_id)) >= controls.max_wakes_per_case) {
-        await finish("skipped", "wake-up limit reached");
-        if (["running", "waiting"].includes(c.status)) await svc.requestReview(tenant, c.case_id, c.version, "wake_limit", `The agent has been woken ${controls.max_wakes_per_case} times on this case, so a person should look.`, "policy-engine");
+        // Hand over first, then close the timer: if the handover fails the timer stays due and the next pass tries again.
+        // Another pass may have handed it over a moment ago, which is fine and must not stop this pass.
+        try {
+          const cur = await svc.getCase(tenant, c.case_id);
+          if (["running", "waiting"].includes(cur.status)) await svc.requestReview(tenant, cur.case_id, cur.version, "wake_limit", `The agent has been woken ${controls.max_wakes_per_case} times on this case, so a person should look.`, "policy-engine");
+          await finish("skipped", "wake-up limit reached");
+        } catch (e) { console.error("wake limit handover", c.case_id, (e as Error).message); }
         continue;
       }
       if (!(await allowed(t.case_id))) { if (!held_back) await finish("skipped", "case spend limit reached"); continue; }
@@ -135,10 +156,20 @@ export async function tick(
       try {
         await svc.emit(c, "wake_fired", "scheduler", `Woke the agent (${t.reason.replace("_", " ")})`, { wake_id: t.wake_id, reason: t.reason });
         await deps.agent.resumeCase(svc, tenant, t.case_id, t);
+        if (t.reason === "evidence_ready") { // this was the second look at a finished interview: if it is still undecided, a person decides
+          const after = await svc.store.getCase(tenant, t.case_id);
+          if (after && after.status === "evaluating") { try { await svc.requestReview(tenant, t.case_id, after.version, "no_decision", "The interview finished, but the agent did not reach a decision. A person should look.", "policy-engine"); } catch (e2) { console.error("no-decision handover", t.case_id, (e2 as Error).message); } }
+        }
         await finish("done", "agent woken");
         wakes.fired.push(t.case_id);
       } catch (e) {
-        await finish("skipped", `wake failed: ${(e as Error).message.slice(0, 120)}`);
+        const why = (e as Error).message.slice(0, 120);
+        await finish("skipped", `wake failed: ${why}`);
+        // Nothing else would bring the agent back to this case, so a person looks instead of it waiting with no timer.
+        try {
+          const cur = await svc.getCase(tenant, t.case_id);
+          if (["running", "waiting", "evaluating"].includes(cur.status)) await svc.requestReview(tenant, cur.case_id, cur.version, "agent_failed", `The agent could not be woken: ${why}`, "policy-engine");
+        } catch (e2) { console.error("wake failure handover", t.case_id, (e2 as Error).message); }
       }
     }
   }

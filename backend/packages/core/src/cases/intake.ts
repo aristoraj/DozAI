@@ -41,8 +41,10 @@ export async function importParticipants(
     const parsed = ParticipantRowSchema.safeParse(rawRows[i]);
     if (!parsed.success) { result.skipped.push({ row, reason: parsed.error.issues.map(x => `${x.path.join(".") || "row"}: ${x.message}`).join("; ") }); continue; }
     const r = parsed.data;
+    if (/[a-z]/i.test(r.phone)) { result.skipped.push({ row, reason: "phone: contains letters, so it is not a valid number" }); continue; } // dropping them would make another number
     const digits = normalizeMsisdn(r.phone, opts.defaultCountryCode);
     if (digits.length < 10 || digits.length > 15) { result.skipped.push({ row, reason: "phone: not a valid number" }); continue; }
+    if (digits.length === 12 && digits.startsWith("91") && !/^91[6-9]/.test(digits)) { result.skipped.push({ row, reason: "phone: an Indian mobile number starts with 6, 7, 8 or 9" }); continue; }
     const hash = phoneHash(opts.piiKey, digits);
     if (seen.has(hash)) { result.skipped.push({ row, reason: `phone: already in this mission (${seen.get(hash)}). The same number can be added to a different mission.` }); continue; }
 

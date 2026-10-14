@@ -11,13 +11,13 @@
 //   doc_id varchar(120) | parent_id varchar(120) | version int | body text
 import { createHash } from "node:crypto";
 import type { Campaign, CaseEvent, CaseRecord, ConversationState, Decision, Evidence, Participant } from "@dozai/contracts";
-import { PLATFORM_TENANT, type EmployeeDefinition } from "../agent/employee";
+import { PLATFORM_TENANT, type EmployeeDefinition, type PlatformDefinition } from "../agent/employee";
 import type { MissionBundle } from "../missions/mission";
 import type { CallRecord, VoiceFormLink } from "../conversation/voice";
 import type { Controls } from "../agent/controls";
 import type { CaseMemory } from "../agent/memory";
 import type { WakeRequest } from "../agent/wake";
-import type { AgentSession, EraseArgs, InboxEvent, OutboxItem, ReviewTask, Store, TraceStep } from "./store";
+import { MAX_DOC_CHARS, type AgentSession, type EraseArgs, type InboxEvent, type OutboxItem, type ReviewTask, type Store, type TraceStep } from "./store";
 
 export interface DocRow {
   uniq_key: string;
@@ -46,7 +46,7 @@ export interface DocDriver {
   deleteWhere(q: Omit<DocQuery, "latestOnly">): Promise<number>;
 }
 
-const MAX_BODY = 9000; // Data Store text columns are size-limited; fail loudly instead of truncating.
+const MAX_BODY = MAX_DOC_CHARS; // Data Store text columns are size-limited; fail loudly instead of truncating. The in-memory store uses the same limit.
 const SAFE = /^[A-Za-z0-9_.:\-]+$/;
 const safe = (s: string): string => {
   if (!SAFE.test(s)) throw new Error(`unsafe identifier: ${s}`);
@@ -131,7 +131,8 @@ export class DocStore implements Store {
 
   // ---- evidence and decisions (append-only) ------------------------------------------
   async addEvidence(e: Evidence) { await this.d.insert(this.row("evidence", "all", e.evidence_id, e.case_id, 1, e)); }
-  async listEvidence(caseId: string) { return (await this.d.select({ tenant_id: "all", collection: "evidence", parent_id: caseId })).sort((a, b) => a.uniq_key.localeCompare(b.uniq_key)).map(r => JSON.parse(r.body) as Evidence); }
+  /** Oldest first, as InMemoryStore returns them: a later answer replaces an earlier one, so the order matters. */
+  async listEvidence(caseId: string) { return (await this.d.select({ tenant_id: "all", collection: "evidence", parent_id: caseId })).sort((a, b) => a.uniq_key.localeCompare(b.uniq_key)).map(r => JSON.parse(r.body) as Evidence).sort((a, b) => (a.at ?? "").localeCompare(b.at ?? "")); }
   async listAllEvidence() { return (await this.d.select({ tenant_id: "all", collection: "evidence" })).map(r => JSON.parse(r.body) as Evidence); }
   async addDecision(x: Decision) { await this.d.insert(this.row("decision", "all", x.decision_id, x.case_id, 1, x)); }
   async listDecisions(caseId: string) { return (await this.d.select({ tenant_id: "all", collection: "decision", parent_id: caseId })).map(r => JSON.parse(r.body) as Decision); }
@@ -270,6 +271,9 @@ export class DocStore implements Store {
   putEmployee(e: EmployeeDefinition) { return this.putBlob("employee", "epart", PLATFORM_TENANT, e.version, e, { version: e.version, name: e.name }); }
   getEmployee(version: string) { return this.getBlob<EmployeeDefinition>("employee", "epart", PLATFORM_TENANT, version); }
   listEmployees() { return this.listBlobs<EmployeeDefinition>("employee", "epart", PLATFORM_TENANT); }
+  putPlatform(p: PlatformDefinition) { return this.putBlob("platform", "ppart", PLATFORM_TENANT, p.version, p, { version: p.version }); }
+  getPlatform(version: string) { return this.getBlob<PlatformDefinition>("platform", "ppart", PLATFORM_TENANT, version); }
+  listPlatform() { return this.listBlobs<PlatformDefinition>("platform", "ppart", PLATFORM_TENANT); }
 
   // ---- phone calls: the form each mission was published as (configuration), and the calls themselves (personal data) ---------
   async putVoiceForm(l: VoiceFormLink) { await this.putVersioned("voiceform", l.tenant_id, l.mission_version, "-", l); }
@@ -280,6 +284,12 @@ export class DocStore implements Store {
 
   // ---- campaigns -------------------------------------------------------------------------------------------------------
   async putCampaign(c: Campaign) { await this.putVersioned("campaign", c.tenant_id, c.campaign_id, "-", c); }
+  /** The unique key makes this a compare-and-set: of two writers over the same version, only one row is inserted. */
+  async putCampaignIf(next: Campaign, read: Campaign) {
+    const cur = (await this.d.select({ tenant_id: next.tenant_id, collection: "campaign", doc_id: next.campaign_id, latestOnly: true }))[0];
+    if (!cur || cur.body !== JSON.stringify(read)) return false;
+    return this.d.insert(this.row("campaign", next.tenant_id, next.campaign_id, "-", cur.version + 1, next));
+  }
   async getCampaign(t: string, id: string) { return this.parse<Campaign>((await this.d.select({ tenant_id: t, collection: "campaign", doc_id: id, latestOnly: true }))[0]); }
   async listCampaigns(t: string) { return (await this.latestByDoc({ tenant_id: t, collection: "campaign" })).map(r => JSON.parse(r.body) as Campaign); }
 

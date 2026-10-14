@@ -1,7 +1,7 @@
 // Claude engine page: the tabs and the agent overview.
 import { state } from "../../lib/state.js";
 import { pageHead } from "../../components/page.js";
-import { renderEmployee } from "./employee.js";
+import { layerStrip, renderEmployee, renderPlatform } from "./employee.js";
 import { renderControls } from "./controls.js";
 import { renderSessions } from "./sessions.js";
 import { esc } from "../../lib/format.js";
@@ -20,10 +20,11 @@ export const TOOL_HELP = {
 };
 export function renderAgent() {
   const tab = state.agentTab;
-  const tabs = [["agent", "Agent"], ["employee", "Employee"], ["controls", "Controls"], ["sessions", "Sessions"]];
+  const tabs = [["agent", "Agent"], ["platform", "Platform"], ["employee", "Employees"], ["controls", "Controls"], ["sessions", "Sessions"]];
   return `${pageHead("Claude engine", "The agent, its limits and what it has done.", "It can only use the tools below. It cannot read the database, see phone numbers, or complete a case on its own.")}
+    ${layerStrip()}
     <div class="agent-tabs" role="tablist">${tabs.map(([id, l]) => `<button class="agent-tab ${tab === id ? "active" : ""}" data-agent-tab="${id}" role="tab">${l}</button>`).join("")}</div>
-    ${tab === "agent" ? renderAgentInfo() : tab === "employee" ? renderEmployee() : tab === "controls" ? renderControls() : renderSessions()}`;
+    ${tab === "agent" ? renderAgentInfo() : tab === "platform" ? renderPlatform() : tab === "employee" ? renderEmployee() : tab === "controls" ? renderControls() : renderSessions()}`;
 }
 function renderAgentInfo() {
   const r = state.mission.runtime;

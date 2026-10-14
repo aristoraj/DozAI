@@ -2,6 +2,7 @@
 import { can, state } from "../lib/state.js";
 import { empty, pageHead, statusPill } from "../components/page.js";
 import { esc, plural } from "../lib/format.js";
+import { hasEmployer } from "./campaigns.js";
 import { $ } from "../lib/dom.js";
 import { act, api } from "../lib/api.js";
 
@@ -20,8 +21,8 @@ function reviewDetail(c) {
   return `<div class="review-title"><div><div class="eyebrow">Decision required</div><h2>${esc(c.name)}</h2><p>${esc(c.id)} · ${esc(c.cohort)} · ${esc(c.location)}</p></div>${statusPill(c.status)}</div>
     <div class="evidence-grid">
       <div class="evidence-card"><small>Current reading</small><strong>${esc(c.outcome)}</strong><p>Proposed by the agent.</p></div>
-      <div class="evidence-card flagged"><small>Programme record</small><strong>${esc(c.recorded_employer)}</strong><p>What the programme has on file.</p></div>
-      <div class="evidence-card"><small>Reported employer</small><strong>${esc(c.employer)}</strong><p>From the participant's reply.</p></div>
+      ${hasEmployer(c) ? `<div class="evidence-card flagged"><small>Programme record</small><strong>${esc(c.recorded_employer)}</strong><p>What the programme has on file.</p></div>
+      <div class="evidence-card"><small>Reported employer</small><strong>${esc(c.employer)}</strong><p>From the participant's reply.</p></div>` : ""}
       <div class="evidence-card"><small>Confidence</small><strong>${c.confidence}%</strong><p>Auto-confirm needs ${Math.round(state.mission.policy.auto_confirm_at * 100)}% and no conflict.</p></div></div>
     <div style="margin:14px 0"><h3 class="t-md" style="margin:0 0 6px">Conversation</h3><div id="reviewConv"></div></div>
     <div class="agent-callout"><small>Why this needs a person</small><h3>${esc(c.reason)}</h3><p>The agent's recommendation is not a final decision.</p></div>

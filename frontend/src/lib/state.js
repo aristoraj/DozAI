@@ -6,7 +6,7 @@ export const state = {
   view: "overview", localRole: "admin", dashMission: ALL, caseTab: "overview", caseTabFor: null,
   me: null, mission: null, cases: [], audits: [], summary: null, sessions: [],
   missions: [], defaultMission: null, missionShown: null, campaigns: [],
-  employees: [], employeeCanEdit: false, employeeShown: null, employeeDef: null, ctxPreview: null,
+  employees: [], employeeCanEdit: false, platform: null, platformShown: null, employeeShown: null, employeeDef: null, ctxPreview: null,
   voiceForm: null, voiceFormFor: null, voicePublishing: false, voiceLoading: false, wording: null, wordingFor: null, qeditor: null, wordingLoading: false, wordingFailedFor: null,
   approvals: [], approvalsWaiting: 0, controlsInfo: null, replay: null, voice: null, voiceCheck: null,
   loaded: false, error: null,

@@ -4,7 +4,7 @@ import { $, caseDrawer, drawerBackdrop } from "../lib/dom.js";
 import { colorFor, esc, initials, istDay, istTime, plural, withIst } from "../lib/format.js";
 import { STATUS_LABEL, statusPill } from "./page.js";
 import { loadingLine } from "./busy.js";
-import { missionName } from "../pages/campaigns.js";
+import { hasEmployer, missionName } from "../pages/campaigns.js";
 import { go } from "../shell.js";
 import { act, api } from "../lib/api.js";
 import { confirmModal } from "./modal.js";
@@ -54,7 +54,7 @@ export async function openCase(id) {
       </div></div>
     <div class="drawer-tabs" role="tablist" aria-label="Case sections">${TABS.map(([k, label]) => `<button type="button" class="drawer-tab" role="tab" id="tab-${k}" data-tab="${k}" aria-controls="panel-${k}" aria-selected="${k === tab}" tabindex="${k === tab ? 0 : -1}">${label}<span class="tab-count" data-tab-count="${k}" hidden></span></button>`).join("")}</div>
     ${panel("overview", `<div class="drawer-section"><h3>What we need to know</h3><div id="reqBox">${loadingLine()}</div></div>
-      <div class="drawer-section"><h3>Participant</h3><dl class="kv">${kv("Phone", c.phone)}${kv("Programme record employer", c.recorded_employer)}${kv("Reported employer", c.employer)}${kv("Case owner", c.owner)}${kv("Mission", missionName(c.mission_version ?? state.missions[0]?.version))}</dl></div>
+      <div class="drawer-section"><h3>Participant</h3><dl class="kv">${kv("Phone", c.phone)}${hasEmployer(c) ? kv("Programme record employer", c.recorded_employer) + kv("Reported employer", c.employer) : ""}${kv("Case owner", c.owner)}${kv("Mission", missionName(c.mission_version ?? state.missions[0]?.version))}</dl></div>
       ${can("admin") ? `<div class="drawer-section danger-zone"><h3>Danger zone</h3><p class="t-sm muted" style="margin:0 0 10px">Deleting erases this participant's name, number, replies and evidence. The case stays only as an anonymous entry in the audit trail. This cannot be undone.</p><button class="button ghost small" id="deleteCase" style="color:#b64b48;border-color:#b64b48">Delete case…</button></div>` : ""}`)}
     ${panel("conversation", `<div id="convBox">${loadingLine()}</div>${simulated && can("run") && c.stage !== "Complete" ? `<div style="display:flex;gap:8px;margin-top:10px"><input id="simText" placeholder="Type a participant reply (simulated)" class="t-sm" style="flex:1" /><button class="button primary small" id="simSend" data-busy-label="Sending…">Send</button></div><small class="muted t-xs">WhatsApp is off. This goes through the same conversation logic as a real reply.</small>` : ""}`)}
     ${panel("calls", `<div id="callBox">${loadingLine()}</div>`)}
