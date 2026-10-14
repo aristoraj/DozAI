@@ -5,6 +5,7 @@
 import { MissionDraftSchema, MissionInputSchema, type MissionBrief, type MissionDraft, type MissionInput } from "@dozai/contracts";
 import { missionProblems, type MissionBundle } from "./mission";
 import { channelFlowProblems } from "./flow";
+import { categoryKey, categoryProblems, duplicateProblems } from "./questions";
 import type { Instrument } from "./instrument";
 
 export interface MissionDrafter {
@@ -66,10 +67,10 @@ export async function draftMission(drafter: MissionDrafter, brief: MissionBrief,
     try { d = await drafter.draft(brief, base, fix); }
     catch (e) { problems = [(e as Error).message.slice(0, 400)]; fix = problems; continue; }
     notes = d.notes ?? [];
-    const input = assembleMission(brief, MissionDraftSchema.parse(d), base, ids);
+    const input = assembleMission(brief, tidyCategories(MissionDraftSchema.parse(d)), base, ids);
     const parsed = MissionInputSchema.safeParse(input);
     // A drafted mission must also ask the same things on WhatsApp and on a call. (Saved missions are not held to this: many were written by hand.)
-    problems = parsed.success ? [...missionProblems(parsed.data), ...channelFlowProblems(parsed.data.instrument as Instrument, parsed.data.evidence_requirements ?? [])] : parsed.error.issues.map(i => `${i.path.join(".") || "mission"}: ${i.message}`);
+    problems = parsed.success ? [...missionProblems(parsed.data), ...channelFlowProblems(parsed.data.instrument as Instrument, parsed.data.evidence_requirements ?? []), ...duplicateProblems(parsed.data.instrument as Instrument), ...(drafter.kind === "claude" ? categoryProblems(parsed.data.instrument as Instrument) : [])] : parsed.error.issues.map(i => `${i.path.join(".") || "mission"}: ${i.message}`);
     if (!problems.length) return { definition: input, problems: [], notes, attempts: attempt, source: drafter.kind };
     fix = problems;
   }
@@ -77,6 +78,20 @@ export async function draftMission(drafter: MissionDrafter, brief: MissionBrief,
 }
 
 // ---- a drafter that needs no model: a plain starting point for development and for when no key is set ------------------------------------------------
+
+/** Categories as one tidy key each: "Same Job", "same job" and "same_job" are one category, and a question is never left without one. */
+export function tidyCategories(d: MissionDraft): MissionDraft {
+  return { ...d, questions: d.questions.map(q => ({ ...q, module: categoryKey(q.module) || "general" })) };
+}
+
+/** The plain drafter has no model, so it sorts a line of the brief into a category by the words in it. Support is checked first ("job support" is support). */
+export function categoryFor(label: string): string {
+  const t = label.toLowerCase();
+  if (/\b(support|help|assist|guidance|counsel|training|upskill)/.test(t)) return "support";
+  if (/\b(work|job|employ|company|role|title|salary|income|wage|position|occupation|shop|business)/.test(t)) return "work";
+  if (/\b(age|family|address|village|city|location|education|study|school|course)/.test(t)) return "about_you";
+  return "general";
+}
 
 /** One text question per line of "find out". Good enough to see the flow; a person is expected to rewrite it. */
 export class ScriptedMissionDrafter implements MissionDrafter {
@@ -92,7 +107,7 @@ export class ScriptedMissionDrafter implements MissionDrafter {
       outcomes: [{ key: "answered", label: "Answered", description: "The person answered what we asked." }, { key: "unclear", label: "Unclear", description: "The answers do not settle it." }],
       verdict_labels: { confirmed: "Answers collected", not_confirmed: "Not answered", inconclusive: "Unclear" },
       evidence_requirements: rows.map(r => ({ key: r.key, label: r.label, required: true, min_confidence: 0.6 })),
-      questions: rows.map(r => ({ id: `q_${r.key}`.slice(0, 40), module: "questions", type: "text" as const, evidence_key: r.key, text: `${r.label}?` })),
+      questions: rows.map(r => ({ id: `q_${r.key}`.slice(0, 40), module: categoryFor(r.label), type: "text" as const, evidence_key: r.key, text: `${r.label}?` })),
       start_message: "Thank you. We will now ask a few short questions. You can reply STOP at any time.",
       closing_message: "Thank you for your time. Our team will look at your answers.",
       reask_prefix: "Sorry, we could not understand that.", unsupported_prefix: "We can only read text messages for now.",

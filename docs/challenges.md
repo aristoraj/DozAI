@@ -84,6 +84,57 @@ Each problem: what we saw, why it happened, how we fixed it.
 - **Symptom:** After the check was added to general mission validation, a dozen existing tests (and, in effect, any hand-written mission that branches without a list of needs) failed to save.
 - **Fix:** The check is enforced only when Mission Studio drafts a mission. Saved missions are not held to it.
 
+## Removing a question could send people to the wrong branch
+
+- **Symptom:** Taking "Why did you change jobs?" out of the built-in mission made people who changed jobs get the questions meant for people who are not working. Found by a test that runs the server's WhatsApp and phone-call agreement check on the edited mission.
+- **Cause:** A question with no rule of its own goes to the next one in the list. Removing the question that was next changed what the earlier question led to.
+- **Fix:** When a question is removed, any question that was relying on the list order gets an explicit rule to where the removed question would have gone.
+
+## The same question on two branches was refused as a repeat
+
+- **Symptom:** The built-in mission could not even be edited: "What is your job title or the work you do?" is asked on two branches, and the editor said it repeated another question.
+- **Cause:** The first version of the repeat check compared wording across the whole list, not only questions one person could meet.
+- **Fix:** A repeat means the same wording (or the same answer) for questions that can be asked of the same person. The browser and the server use the same idea.
+
+## The wording comparison threw away Hindi vowel signs
+
+- **Symptom:** "आप कहाँ काम करते हैं" was compared as "आप कह क म करत ह".
+- **Cause:** The same mistake as in the reply reader: cleaning text kept only letters and digits, and Devanagari vowel signs are a separate kind of character.
+- **Fix:** Marks are kept, in the server and in the browser. A test covers it in both.
+
+## Signing off looked like it created a duplicate mission
+
+- **Symptom:** After signing off, the mission picker listed the mission twice: `MSN-001-v1.3` and `MSN-001-v1.3-signed`.
+- **Cause:** Not a double call. Sign-off saved a copy under a new name by design, because saved missions never change and the built-in mission cannot be edited at all. The original stayed in the list, and its participants stayed on unsigned wording.
+- **Fix:** Sign-off approves the same mission in place. For the built-in mission an approved copy is stored under the same name and used instead of the code version. Checked in a real browser: one mission before, the same one signed afterwards, still with its participants, and one entry in the picker.
+
+## Pressing a button twice could send the work twice
+
+- **Symptom:** Buttons that call the server stayed clickable while the work ran, so a second click on a slow server sent the work again (for example two approvals, or two "check for replies").
+- **Cause:** Only some buttons disabled themselves, and none showed that anything was happening, which invited the second click.
+- **Fix:** The button that was pressed is held from the first moment (disabled, with the working label and a spinner after a short delay). A test presses a slow button three times and checks that one request went out.
+
+## A confirm dialog closed before the work was done
+
+- **Symptom:** After "Sign off" or "Switch everything off" the dialog vanished and the page showed nothing while the work ran.
+- **Fix:** The dialog stays open, its button says what it is doing, and it closes when the work ends. Pressing the button twice does nothing.
+
+## Showing a loading line for the mission questions could have retried forever
+
+- **Found while building it:** Drawing a loading line means drawing the page, and drawing the page used to start the load again. A load that failed would then have restarted by itself without end.
+- **Fix:** A failed load is remembered for that mission and is not started again by itself. The button to open the questions comes back.
+
+## The card editor lost the category headings
+
+- **Symptom:** The first version of the question editor listed the questions flat, so the groups ("work", "support") the old read-only view had were gone.
+- **Cause:** The editor drew a list of cards and never used each question's `module`.
+- **Fix:** The cards are grouped under their category with a count. A question keeps its number (its place in the order), because the checks and error messages use that number.
+
+## Editing the written question would have changed what a call says
+
+- **Symptom (before it shipped):** With the phone wording locked, a plain edit of the written question still changed the voice agent's words, because the phone wording follows the written text when no phone wording is set.
+- **Fix:** The first edit of a question's written wording pins the phone wording it had, and the server refuses a sign-off that would make a call sound different.
+
 ## Still open
 
 - Nothing known on the pages that exist today. The audit that found the items above (every page and dialog, at desktop and phone width) can be run again after any UI change.

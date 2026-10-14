@@ -31,6 +31,9 @@ describe("drafting with Claude", () => {
     expect((req.tools as { name: string }[])[0]!.name).toBe("submit_mission_draft");
     expect(String(req.system)).toContain("Do not add questions about consent or identity");
     expect(String(req.system)).toContain("nothing about health, caste, religion");
+    // the model is asked to sort the questions into categories by purpose, not by branch
+    expect(String(req.system)).toContain("Give every question a \"module\": its category, by purpose");
+    expect(String(req.system)).toContain("never use the same name twice with different spellings");
   });
 
   it("never sends anything about a person: only the brief and facts about the mission", async () => {

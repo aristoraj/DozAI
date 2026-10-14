@@ -46,8 +46,12 @@ Everything runs on **synthetic data** (12 sample cases). Do not load real partic
 | `src/number.js` | Custom number fields. Hides the browser's arrows and adds "−" and "+" buttons around the real input |
 | `src/file.js` | Custom file picker. A styled button and the file name, with the real input hidden inside |
 | `src/dashboard.js` | The Command centre's mission filter: which cases a mission keeps, the counting rules (the same as the server's summary), and the small motion that eases the numbers, bars and donut into place |
+| `src/busy.js` | The loading behaviour for the whole app: holds the button that was just pressed (spinner, no double press), the bar along the top for slow work, and the spinner markup for areas waiting for data |
+| `src/questions.js` | The question editor: one card per question showing WhatsApp and phone wording, with Edit, Remove and Add. The changes it makes to a mission are plain functions, tested on their own |
 | `src/styles.css` | All styling: colours and the type scale at the top, one look for every form field, then each screen |
 | `src/ui.test.ts` | Clicks through the real page against the real API (in memory, fake data) |
+| `src/busy.test.ts` | The loading rules: what is held, when the spinner and bar appear, and that everything is put back |
+| `src/questions.test.ts` | Edit, remove and add rules, each result run through the server's own check |
 | `src/select.test.ts`, `number.test.ts`, `file.test.ts` | Tests for the custom controls with fake data |
 | `src/dashboard.test.ts` | Tests for the counting rules and the motion, with fake data |
 

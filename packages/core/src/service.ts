@@ -40,7 +40,8 @@ export class CaseService {
   forceWindow?: { windowStartHour: number; windowEndHour: number };
   /** Phone calls are available. Set by the platform when a voice channel (or its simulator) is configured. */
   voiceEnabled = false;
-  private missionCache = new Map<string, MissionBundle>();
+  /** Approved missions never change again, so they are kept. A mission still being written, or the built-in one (which may be approved at any time), is read again after a few seconds so every copy of the server sees an approval. */
+  private missionCache = new Map<string, { m: MissionBundle; at: number }>();
   private employeeCache = new Map<string, EmployeeDefinition>();
 
   constructor(
@@ -51,15 +52,18 @@ export class CaseService {
 
   // ---- missions -------------------------------------------------------------
 
-  /** A mission by version. No version means the built-in mission (cases made before missions existed). Missions never change, so this is cached. */
+  /**
+   * A mission by version. No version means the built-in mission (cases made before missions existed). Once the wording of the built-in
+   * mission is signed off, its approved copy is stored under the same version name and used from then on.
+   */
   async getMission(tenant: string, version?: string): Promise<MissionBundle> {
-    if (!version || version === PLACEMENT_RETENTION_V1.version) return PLACEMENT_RETENTION_V1;
-    const key = `${tenant}|${version}`;
+    const v = version ?? PLACEMENT_RETENTION_V1.version;
+    const key = `${tenant}|${v}`, now = this.now().getTime();
     const hit = this.missionCache.get(key);
-    if (hit) return hit;
-    const m = await this.store.getMission(tenant, version);
-    if (!m) throw new DozaiError("MISSION_NOT_FOUND", `mission ${version} does not exist`, 404);
-    this.missionCache.set(key, m);
+    if (hit && (hit.m.instrument_signed_off || now - hit.at < 5000)) return hit.m;
+    const m = (await this.store.getMission(tenant, v)) ?? (v === PLACEMENT_RETENTION_V1.version ? PLACEMENT_RETENTION_V1 : undefined);
+    if (!m) throw new DozaiError("MISSION_NOT_FOUND", `mission ${v} does not exist`, 404);
+    this.missionCache.set(key, { m, at: now });
     return m;
   }
 
@@ -81,10 +85,12 @@ export class CaseService {
     console.log(`mission ${version} deleted by ${p.role}:${p.user_id}`);
   }
 
-  /** The built-in mission first, then the saved ones, oldest first. */
+  /** The built-in mission first (its approved copy once it has been signed off), then the saved ones, oldest first. */
   async listMissions(tenant: string): Promise<MissionBundle[]> {
-    const saved = (await this.store.listMissions(tenant)).sort((a, b) => (a.created_at ?? "").localeCompare(b.created_at ?? ""));
-    return [PLACEMENT_RETENTION_V1, ...saved];
+    const stored = await this.store.listMissions(tenant);
+    const builtIn = stored.find(m => m.version === PLACEMENT_RETENTION_V1.version) ?? PLACEMENT_RETENTION_V1;
+    const saved = stored.filter(m => m.version !== PLACEMENT_RETENTION_V1.version).sort((a, b) => (a.created_at ?? "").localeCompare(b.created_at ?? ""));
+    return [builtIn, ...saved];
   }
 
   /** What new participants join when nothing is chosen: the most recently added mission. */
@@ -97,6 +103,25 @@ export class CaseService {
     try { await this.employeeFor(bundle); } catch (e) { throw new DozaiError("INVALID_MISSION", (e as Error).message, 400); }
     if (!(await this.store.putMission(p.tenant_id, bundle))) throw new DozaiError("MISSION_EXISTS", `version ${bundle.version} already exists. Saved missions never change: use a new version name.`, 409);
     return bundle;
+  }
+
+  /**
+   * Sign off a mission: the same mission, same version, with its wording approved (and the questions as edited on the way, if they were).
+   * It does not make a second mission. This is the one change a saved mission ever gets, and it can happen once: after it the mission is
+   * approved and never changes again. Who approved it and when is recorded here, whatever the request says. `raw` is the full definition.
+   */
+  async signOffMission(p: Principal, version: string, raw: unknown): Promise<MissionBundle> {
+    const current = await this.getMission(p.tenant_id, version);
+    if (!current.instrument.draft) throw new DozaiError("ALREADY_SIGNED_OFF", "this wording is already signed off", 409);
+    const { bundle, problems } = parseMission(raw, `${p.role}:${p.user_id}`, this.now(), { builtInOk: version === PLACEMENT_RETENTION_V1.version });
+    if (!bundle) throw new DozaiError("INVALID_MISSION", problems.slice(0, 8).join("; "), 400);
+    if (bundle.version !== version || bundle.instrument.draft) throw new DozaiError("INVALID_MISSION", "signing off keeps the same version and approves the wording", 400);
+    try { await this.employeeFor(bundle); } catch (e) { throw new DozaiError("INVALID_MISSION", (e as Error).message, 400); }
+    const signed: MissionBundle = { ...bundle, created_at: current.created_at, created_by: current.created_by }; // it keeps its place in the list
+    if (!(await this.store.replaceMission(p.tenant_id, signed))) throw new DozaiError("ALREADY_SIGNED_OFF", "this wording was just signed off by someone else", 409);
+    this.missionCache.set(`${p.tenant_id}|${version}`, { m: signed, at: this.now().getTime() });
+    console.log(`mission ${version} signed off by ${p.role}:${p.user_id}`);
+    return signed;
   }
 
   // ---- employees ------------------------------------------------------------

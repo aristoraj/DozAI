@@ -254,3 +254,137 @@ describe("DozaiError is still thrown for bad missions", () => {
     expect(e.httpStatus).toBe(400);
   });
 });
+
+// ---- signing off: the same mission is approved in place --------------------------------------------------------------------------------
+import type { MissionBundle } from "./mission";
+
+const definitionOf = (m: MissionBundle) => ({ mission_id: m.mission_id, version: m.version, name: m.name, programme_name: m.programme_name, intro_template: m.intro_template, templates: m.templates, policy: m.policy_overrides, agent_guidance: m.agent_guidance, employee_id: m.employee_id, employee_version: m.employee_version, objective: m.objective, evidence_requirements: m.evidence_requirements, strategy: m.strategy, instrument: m.instrument });
+const approved = (m: MissionBundle, over: Record<string, unknown> = {}) => ({ ...definitionOf(m), instrument: { ...m.instrument, draft: false }, ...over });
+const draftLoan = () => loan({ instrument: { ...loan().instrument, draft: true } });
+
+describe.each(stores)("signing off a mission in place: %s", (_n, make) => {
+  it("approves the same version: no second mission, same place in the list, who and when recorded", async () => {
+    const s = make(), svc = new CaseService(s);
+    const draft = await svc.createMission(admin, draftLoan());
+    await svc.createMission(admin, loan({ mission_id: "MSN-OTHER", version: "MSN-OTHER-v1" }));
+    const before = (await svc.listMissions(T)).map(m => m.version);
+    expect(draft.instrument_signed_off).toBe(false);
+    const signed = await svc.signOffMission(admin, draft.version, approved(draft));
+    expect(signed).toMatchObject({ version: "MSN-LOAN-v1", instrument_signed_off: true, created_at: draft.created_at, created_by: draft.created_by });
+    expect(signed.instrument.signed_off).toMatchObject({ by: "admin:a@x.org" });
+    expect((await svc.listMissions(T)).map(m => m.version)).toEqual(before);            // same missions, same order
+    const fresh = await new CaseService(s).getMission(T, draft.version);                 // another copy of the server reads the approved one
+    expect(fresh.instrument.draft).toBe(false);
+    expect(fresh).toEqual(signed);
+  });
+
+  it("can happen once: after it the mission never changes again", async () => {
+    const svc = new CaseService(make());
+    const draft = await svc.createMission(admin, draftLoan());
+    await svc.signOffMission(admin, draft.version, approved(draft));
+    await expect(svc.signOffMission(admin, draft.version, approved(draft, { name: "Changed after approval" }))).rejects.toMatchObject({ code: "ALREADY_SIGNED_OFF", httpStatus: 409 });
+    expect((await svc.getMission(T, draft.version)).name).toBe("Loan repayment check-in");
+    await expect(svc.createMission(admin, approved(draft))).rejects.toMatchObject({ code: "MISSION_EXISTS" }); // saving over it is still refused
+  });
+
+  it("takes the questions as edited on the way to sign-off", async () => {
+    const svc = new CaseService(make());
+    const draft = await svc.createMission(admin, draftLoan());
+    const questions = draft.instrument.questions.map((q, n) => (n === 0 ? { ...q, text: "Was your last instalment paid on time?" } : q));
+    const signed = await svc.signOffMission(admin, draft.version, approved(draft, { instrument: { ...draft.instrument, draft: false, questions } }));
+    expect(signed.instrument.questions[0]!.text).toBe("Was your last instalment paid on time?");
+    expect((await svc.getMission(T, draft.version)).instrument.questions[0]!.text).toBe("Was your last instalment paid on time?");
+  });
+
+  it("refuses a request that changes the version or leaves the wording a draft", async () => {
+    const svc = new CaseService(make());
+    const draft = await svc.createMission(admin, draftLoan());
+    await expect(svc.signOffMission(admin, draft.version, approved(draft, { version: "MSN-LOAN-v2" }))).rejects.toMatchObject({ code: "INVALID_MISSION" });
+    await expect(svc.signOffMission(admin, draft.version, definitionOf(draft))).rejects.toMatchObject({ code: "INVALID_MISSION" });   // still a draft
+    await expect(svc.signOffMission(admin, "MSN-NONE-v1", approved(draft))).rejects.toMatchObject({ code: "MISSION_NOT_FOUND" });
+    expect((await svc.getMission(T, draft.version)).instrument.draft).toBe(true);        // nothing changed
+  });
+
+  it("records who signed whatever the request claims", async () => {
+    const svc = new CaseService(make());
+    const draft = await svc.createMission(admin, draftLoan());
+    const signed = await svc.signOffMission(admin, draft.version, approved(draft, { instrument: { ...draft.instrument, draft: false, signed_off: { by: "someone-important", at: "2020-01-01T00:00:00.000Z" } } }));
+    expect(signed.instrument.signed_off!.by).toBe("admin:a@x.org");
+    expect(signed.instrument.signed_off!.at).not.toBe("2020-01-01T00:00:00.000Z");
+  });
+
+  it("two sign-offs at the same moment: one approval, and the other is refused", async () => {
+    const s = make(), draft = await new CaseService(s).createMission(admin, draftLoan());
+    const r = await Promise.allSettled([new CaseService(s).signOffMission(admin, draft.version, approved(draft)), new CaseService(s).signOffMission(admin, draft.version, approved(draft))]);
+    expect(r.filter(x => x.status === "fulfilled")).toHaveLength(1);
+    expect(r.filter(x => x.status === "rejected")[0]).toMatchObject({ reason: { code: "ALREADY_SIGNED_OFF" } });
+    expect((await new CaseService(s).listMissions(T)).filter(m => m.version === draft.version)).toHaveLength(1);
+  });
+
+  it("keeps the phone form that was published for the mission", async () => {
+    const s = make(), svc = new CaseService(s);
+    const draft = await svc.createMission(admin, draftLoan());
+    await s.putVoiceForm({ tenant_id: T, mission_version: draft.version, form_id: 77, definition_hash: "h", published_at: "2026-10-12T00:00:00Z", published_by: "agent_ops:x" });
+    await svc.signOffMission(admin, draft.version, approved(draft));
+    expect(await s.getVoiceForm(T, draft.version)).toMatchObject({ form_id: 77 });        // the form is not lost; it shows as out of date until published again
+  });
+
+  it("people already on the mission follow the approved wording straight away", async () => {
+    const svc = new CaseService(make(), () => new Date("2026-10-12T06:00:00Z"), { ...DEFAULT_POLICY, windowStartHour: 0, windowEndHour: 24 });
+    const draft = await svc.createMission(admin, draftLoan());
+    await svc.createCase({ tenant_id: T, run_id: "r", case_id: "C-1", participant: person("p1"), mission_version: draft.version });
+    expect((await svc.getMission(T, (await svc.getCase(T, "C-1")).mission_version)).instrument.draft).toBe(true);
+    await svc.signOffMission(admin, draft.version, approved(draft));
+    expect((await svc.getMission(T, (await svc.getCase(T, "C-1")).mission_version)).instrument.draft).toBe(false);
+    expect((await svc.getCase(T, "C-1")).mission_version).toBe(draft.version);            // the case still points at the same mission
+  });
+
+  it("another copy of the server sees the approval within a few seconds", async () => {
+    const s = make(); let now = new Date("2026-10-12T06:00:00Z").getTime();
+    const other = new CaseService(s, () => new Date(now));
+    const draft = await new CaseService(s).createMission(admin, draftLoan());
+    expect((await other.getMission(T, draft.version)).instrument.draft).toBe(true);       // it has read the draft
+    await new CaseService(s).signOffMission(admin, draft.version, approved(draft));
+    now += 6000;
+    expect((await other.getMission(T, draft.version)).instrument.draft).toBe(false);
+  });
+});
+
+describe.each(stores)("signing off the built-in mission: %s", (_n, make) => {
+  const BUILT = PLACEMENT_RETENTION_V1.version;
+
+  it("approves it in place: still one mission with that name, first in the list, used from then on", async () => {
+    const s = make(), svc = new CaseService(s);
+    await svc.createMission(admin, loan());
+    expect((await svc.getMission(T)).instrument.draft).toBe(true);
+    const signed = await svc.signOffMission(admin, BUILT, approved(PLACEMENT_RETENTION_V1));
+    expect(signed).toMatchObject({ version: BUILT, instrument_signed_off: true });
+    const list = await svc.listMissions(T);
+    expect(list.map(m => m.version)).toEqual([BUILT, "MSN-LOAN-v1"]);                    // not listed twice, still first
+    expect(list[0]!.instrument_signed_off).toBe(true);
+    for (const asked of [await svc.getMission(T), await svc.getMission(T, BUILT), await new CaseService(s).getMission(T, BUILT)]) expect(asked.instrument.signed_off).toMatchObject({ by: "admin:a@x.org" });
+    expect((await svc.defaultMission(T)).version).toBe("MSN-LOAN-v1");                   // what new people join does not change
+  });
+
+  it("with edits, and only once", async () => {
+    const svc = new CaseService(make());
+    const questions = PLACEMENT_RETENTION_V1.instrument.questions.map((q, n) => (n === 0 ? { ...q, text: "Which of these describes you right now?" } : q));
+    await svc.signOffMission(admin, BUILT, approved(PLACEMENT_RETENTION_V1, { instrument: { ...PLACEMENT_RETENTION_V1.instrument, draft: false, questions } }));
+    expect((await svc.getMission(T, BUILT)).instrument.questions[0]!.text).toBe("Which of these describes you right now?");
+    await expect(svc.signOffMission(admin, BUILT, approved(PLACEMENT_RETENTION_V1))).rejects.toMatchObject({ code: "ALREADY_SIGNED_OFF" });
+  });
+
+  it("is still the built-in mission: it cannot be deleted, and its name cannot be used to save another", async () => {
+    const svc = new CaseService(make());
+    await svc.signOffMission(admin, BUILT, approved(PLACEMENT_RETENTION_V1));
+    await expect(svc.deleteMission(admin, BUILT)).rejects.toMatchObject({ code: "MISSION_BUILTIN" });
+    await expect(svc.createMission(admin, { ...approved(PLACEMENT_RETENTION_V1) })).rejects.toMatchObject({ code: "INVALID_MISSION" });
+  });
+
+  it("cases made before missions existed (no version) follow the approved wording", async () => {
+    const svc = new CaseService(make(), () => new Date("2026-10-12T06:00:00Z"), { ...DEFAULT_POLICY, windowStartHour: 0, windowEndHour: 24 });
+    await svc.createCase({ tenant_id: T, run_id: "r", case_id: "C-OLD", participant: person("pOld") });
+    await svc.signOffMission(admin, BUILT, approved(PLACEMENT_RETENTION_V1));
+    expect((await svc.getMission(T, (await svc.getCase(T, "C-OLD")).mission_version)).instrument.draft).toBe(false);
+  });
+});

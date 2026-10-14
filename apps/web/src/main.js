@@ -2,6 +2,8 @@
 import { initSelects } from "./select.js";
 import { initNumbers } from "./number.js";
 import { initFiles } from "./file.js";
+import { createQuestionEditor } from "./questions.js";
+import { createBusy, loadingLine, loadingState } from "./busy.js";
 import { ALL, OUTCOMES, casesFor, dashboardFor, donutGradient, legendHtml, paintDashboard } from "./dashboard.js";
 const API_BASE = (window.DOZAI_API_BASE || "/api").replace(/[/]$/, "");
 const CLOUD = API_BASE.startsWith("/server");
@@ -15,7 +17,7 @@ const state = {
   me: null, mission: null, cases: [], audits: [], summary: null, sessions: [],
   missions: [], defaultMission: null, missionShown: null, campaigns: [],
   employees: [], employeeCanEdit: false, employeeShown: null, employeeDef: null, ctxPreview: null,
-  voiceForm: null, voiceFormFor: null, voicePublishing: false, voiceLoading: false, wording: null, wordingFor: null,
+  voiceForm: null, voiceFormFor: null, voicePublishing: false, voiceLoading: false, wording: null, wordingFor: null, qeditor: null, wordingLoading: false, wordingFailedFor: null,
   approvals: [], approvalsWaiting: 0, controlsInfo: null, replay: null, voice: null, voiceCheck: null,
   loaded: false, error: null,
   caseFilter: "all", caseSearch: "", reviewSelected: null,
@@ -64,7 +66,12 @@ const csvCell = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
 const toCsv = (head, rows) => [head, ...rows].map(r => r.map(csvCell).join(",")).join("\n");
 
 // ---- API -------------------------------------------------------------------------------------------------------------------
-async function api(path, { method = "GET", body } = {}) {
+const busy = createBusy(); // holds the button that was just pressed, runs the top bar, and guards against double clicks (busy.js)
+async function api(path, { method = "GET", body, silent = false } = {}) {
+  const end = busy.begin({ silent }); // silent: refreshes that run by themselves, which must not look like work
+  try { return await request(path, method, body); } finally { end(); }
+}
+async function request(path, method, body) {
   let res;
   try {
     res = await fetch(`${API_BASE}${path}`, { method, headers: { "content-type": "application/json", ...(CLOUD ? {} : { "x-dozai-role": ROLE_HEADER[state.localRole] }) }, body: body ? JSON.stringify(body) : undefined });
@@ -121,13 +128,19 @@ function pageHead(eyebrow, title, text, actions = "") {
 const empty = (title, text, action = "") => `<div class="empty-state"><h3>${esc(title)}</h3><p>${esc(text)}</p>${action}</div>`;
 
 function render() {
-  if (!state.loaded) { appView.innerHTML = `<div class="view-enter">${empty("Loading…", "Reading the latest data.")}</div>`; return; }
+  if (!state.loaded) { appView.innerHTML = `<div class="view-enter">${loadingState("Loading…", "Reading the latest data.")}</div>`; return; }
   if (state.error) { appView.innerHTML = `<div class="view-enter">${empty("Could not load data", state.error, `<button class="button primary" data-action="refresh">Try again</button>`)}</div>`; bind(); return; }
   const views = { overview: renderOverview, cases: renderCases, campaigns: renderCampaigns, reviews: renderReviews, agent: renderAgent, approvals: renderApprovals, calls: renderCalls, missions: renderMission, audit: renderAudit };
   const off = state.controlsInfo?.controls.paused ? `<div class="agent-callout" style="border-color:#b64b48;margin-bottom:14px"><small>Switched off</small><h3>Nothing is being sent or placed, and the agent is not being woken.</h3><p>Open Claude engine, then Controls, to switch it back on.</p></div>` : "";
   appView.innerHTML = `<div class="view-enter">${off}${views[state.view]()}</div>`;
   bind();
   if (state.view === "reviews" && state.reviewSelected && $("reviewConv")) fillConversation("reviewConv", state.reviewSelected);
+  // The questions of an unsigned mission open by themselves: reading them is what a sign-off is based on.
+  if (state.view === "missions") {
+    const m = state.missionShown ?? state.mission;
+    if (m && !m.instrument_signed_off && can("admin") && state.wordingFor !== m.version && state.wordingFailedFor !== m.version && !state.wordingLoading) loadWording(m.version);
+    if ($("qEditorMount") && state.qeditor && state.wordingFor === m?.version) { state.qeditor.mount($("qEditorMount")); syncSignOff(); }
+  }
   // The phone card shows whether the form is published and current as soon as the Mission page opens, without a click on Preview.
   if (state.view === "missions" && state.me?.voice && state.me.voice !== "off" && !state.voiceLoading) {
     const v = (state.missionShown ?? state.mission)?.version;
@@ -240,7 +253,7 @@ function filteredCases() {
 
 function renderCases() {
   const list = filteredCases();
-  const actions = `${state.me?.can_purge && can("admin") ? `<button class="button ghost" data-action="purge" style="color:#b64b48;border-color:#b64b48">Delete ALL data…</button>` : ""}${can("admin") ? `<button class="button ghost" data-action="check-replies">Check for replies</button>` : ""}<button class="button ghost" data-action="export-cases">Export CSV</button>${can("intake") ? `<button class="button primary" data-action="import">Add participants</button>` : ""}`;
+  const actions = `${state.me?.can_purge && can("admin") ? `<button class="button ghost" data-action="purge" style="color:#b64b48;border-color:#b64b48">Delete ALL data…</button>` : ""}${can("admin") ? `<button class="button ghost" data-action="check-replies" data-busy-label="Checking…">Check for replies</button>` : ""}<button class="button ghost" data-action="export-cases">Export CSV</button>${can("intake") ? `<button class="button primary" data-action="import">Add participants</button>` : ""}`;
   const options = [["all", "All statuses"], ["review", "Needs review"], ["progress", "In progress"], ["not-started", "Not started"], ["confirmed", "Confirmed"], ["not-confirmed", "Not confirmed"], ["inconclusive", "Inconclusive"], ["opted-out", "Opted out"]];
   return `${pageHead("Cases", "Every participant has one accountable case.", "The current state, the evidence behind it, and the next permitted action.", actions)}
     <section class="card table-card">
@@ -262,7 +275,7 @@ const missionName = v => { const m = state.missions.find(x => x.version === v); 
 function renderCampaigns() {
   const list = state.campaigns;
   const running = list.some(c => c.status === "running");
-  const actions = can("intake") ? `${running ? `<button class="button ghost" data-action="run-batch">Send next batch now</button>` : ""}<button class="button primary" data-action="new-campaign">New campaign</button>` : "";
+  const actions = can("intake") ? `${running ? `<button class="button ghost" data-action="run-batch" data-busy-label="Sending…">Send next batch now</button>` : ""}<button class="button primary" data-action="new-campaign">New campaign</button>` : "";
   return `${pageHead("Campaigns", "Send the first message to many people, at a safe pace.", "A campaign sends each person their mission's first message in small batches, inside the contact hours and under a daily limit. Replies are handled automatically.", actions)}
     ${list.length ? list.map(campaignCard).join("") : empty("No campaigns yet", can("intake") ? "Add participants, then create a campaign to message them. Nothing is sent until you start it." : "No campaign has been created.", can("intake") ? `<button class="button primary" data-action="new-campaign">New campaign</button>` : "")}`;
 }
@@ -300,23 +313,29 @@ function campaignAct(id, act) {
     return confirmModal({
       title: `Start "${c.name}"?`,
       text: `${plural(c.progress?.queued ?? 0, "person", "people")} will be messaged, at most ${c.daily_cap} a day and ${c.per_tick} a minute, inside the contact hours (${state.mission?.policy.contact_window}). ${live ? "These are real WhatsApp messages." : "WhatsApp is off, so messages are simulated."} People loaded after this moment are not included.`,
-      button: "Start sending",
+      button: "Start sending", busy: "Starting…",
       onConfirm: () => run(out => `Started. ${plural(out.pass?.sent ?? 0, "first message")} sent now.`),
     });
   }
   if (act === "stop") {
-    return confirmModal({ title: `${c.status === "draft" ? "Discard" : "Stop"} "${c.name}"?`, text: c.status === "draft" ? "Nothing has been sent. The campaign is closed and cannot be started." : "No more first messages will be sent. People already messaged keep their conversations. A stopped campaign cannot be restarted.", button: c.status === "draft" ? "Discard" : "Stop campaign", danger: true, onConfirm: () => run(() => "Campaign stopped.") });
+    return confirmModal({ title: `${c.status === "draft" ? "Discard" : "Stop"} "${c.name}"?`, text: c.status === "draft" ? "Nothing has been sent. The campaign is closed and cannot be started." : "No more first messages will be sent. People already messaged keep their conversations. A stopped campaign cannot be restarted.", button: c.status === "draft" ? "Discard" : "Stop campaign", busy: c.status === "draft" ? "Discarding…" : "Stopping…", danger: true, onConfirm: () => run(() => "Campaign stopped.") });
   }
   run(out => act === "pause" ? "Paused. Nothing more will be sent until you resume." : `Resumed. ${plural(out.pass?.sent ?? 0, "first message")} sent now.`);
 }
 const act_ = (id, a) => act(() => api(`/campaigns/${id}/${a}`, { method: "POST" }), null);
 
-function confirmModal({ title, text, button, danger, onConfirm }) {
+// The dialog stays open while the work runs, with the button saying so ("Signing off…"), and closes when it is done, worked or not.
+function confirmModal({ title, text, button, danger, busy: busyLabel = "Working…", onConfirm }) {
   modal.innerHTML = `<div class="modal-head"><div><h2 id="modalTitle">${esc(title)}</h2><p>${esc(text)}</p></div><button class="close-button" id="closeModal" aria-label="Close">×</button></div>
-    <div class="modal-foot"><button class="button ghost" id="cancelConfirm">Cancel</button><button class="button primary" id="okConfirm" ${danger ? 'style="background:#b64b48;border-color:#b64b48"' : ""}>${esc(button)}</button></div>`;
+    <div class="modal-foot"><button class="button ghost" id="cancelConfirm">Cancel</button><button class="button primary" id="okConfirm" data-busy-label="${esc(busyLabel)}" ${danger ? 'style="background:#b64b48;border-color:#b64b48"' : ""}>${esc(button)}</button></div>`;
   modalBackdrop.hidden = false;
   $("closeModal").addEventListener("click", closeModal); $("cancelConfirm").addEventListener("click", closeModal);
-  $("okConfirm").addEventListener("click", async () => { $("okConfirm").disabled = true; closeModal(); await onConfirm(); });
+  const ok = $("okConfirm");
+  ok.addEventListener("click", async () => {
+    if (ok.dataset.started) return; ok.dataset.started = "1"; // one press only
+    $("cancelConfirm").disabled = true;
+    try { await onConfirm(); } finally { if ($("okConfirm") === ok) closeModal(); }
+  });
 }
 
 function openCampaignModal() {
@@ -338,7 +357,7 @@ function openCampaignModal() {
         <div class="field"><label for="cmpTick">Most messages a minute</label><input id="cmpTick" type="number" min="1" max="50" value="${s.per_tick}" /></div>
         ${s.error ? `<p class="danger-text t-sm" style="grid-column:1/-1;margin:0">${esc(s.error)}</p>` : ""}
       </div></div>
-      <div class="modal-foot"><button class="button ghost" id="cancelCmp">Cancel</button><button class="button primary" id="saveCmp" ${s.running || s.name.trim().length < 2 ? "disabled" : ""}>Create campaign</button></div>`;
+      <div class="modal-foot"><button class="button ghost" id="cancelCmp">Cancel</button><button class="button primary" id="saveCmp" data-busy-label="Creating…" ${s.running || s.name.trim().length < 2 ? "disabled" : ""}>Create campaign</button></div>`;
     $("closeModal").addEventListener("click", closeModal); $("cancelCmp").addEventListener("click", closeModal);
     $("cmpName").addEventListener("input", e => { s.name = e.target.value; $("saveCmp").disabled = s.name.trim().length < 2; });
     $("cmpMission").addEventListener("change", e => { s.mission = e.target.value; s.cohort = ""; draw(); });
@@ -362,11 +381,11 @@ function openMissionModal(prefill) {
   const draw = () => {
     modal.innerHTML = `<div class="modal-head"><div><h2 id="modalTitle">Add a mission</h2><p>A mission is one client's first message, questions, contact rules and agent notes. Saved missions never change: to change one, add a new version.</p></div><button class="close-button" id="closeModal" aria-label="Close">×</button></div>
       <div class="modal-body"><div class="form-grid">
-        <div class="field full"><label for="mFrom">Start from</label><div style="display:flex;gap:8px"><select id="mFrom" style="flex:1">${state.missions.map(m => `<option value="${esc(m.version)}" ${m.version === s.from ? "selected" : ""}>${esc(m.name)} · ${esc(m.version)}</option>`).join("")}</select><button type="button" class="button ghost small" id="mLoad">Copy it here</button></div></div>
+        <div class="field full"><label for="mFrom">Start from</label><div style="display:flex;gap:8px"><select id="mFrom" style="flex:1">${state.missions.map(m => `<option value="${esc(m.version)}" ${m.version === s.from ? "selected" : ""}>${esc(m.name)} · ${esc(m.version)}</option>`).join("")}</select><button type="button" class="button ghost small" id="mLoad" data-busy-label="Copying…">Copy it here</button></div></div>
         <div class="field full"><label for="mText">Definition (JSON)</label><textarea id="mText" rows="14" spellcheck="false" class="mono t-xs" placeholder="Copy an existing mission, then change the version name, wording and questions.">${esc(s.text)}</textarea><small>Change mission_id, version and name. A mission that is not approved (instrument.draft: true) cannot be used for live campaigns.</small></div>
         ${s.error ? `<p class="danger-text t-sm" style="grid-column:1/-1;margin:0;white-space:pre-wrap">${esc(s.error)}</p>` : ""}
       </div></div>
-      <div class="modal-foot"><button class="button ghost" id="cancelM">Cancel</button><button class="button primary" id="saveM" ${s.running || !s.text.trim() ? "disabled" : ""}>Save mission</button></div>`;
+      <div class="modal-foot"><button class="button ghost" id="cancelM">Cancel</button><button class="button primary" id="saveM" data-busy-label="Saving…" ${s.running || !s.text.trim() ? "disabled" : ""}>Save mission</button></div>`;
     $("closeModal").addEventListener("click", closeModal); $("cancelM").addEventListener("click", closeModal);
     $("mFrom").addEventListener("change", e => { s.from = e.target.value; });
     $("mLoad").addEventListener("click", async () => {
@@ -417,19 +436,19 @@ async function openCase(id) {
       ${canRun && !simulated ? `<p class="t-xs muted" style="margin:10px 0 8px">WhatsApp is live. The agent sends the approved message to this participant and waits for a real reply.</p>` : ""}
       <div class="next-buttons">
         ${c.stage === "Review" && can("review") ? `<button class="button primary small" id="goReview">Open review</button>` : ""}
-        ${canRun ? `<button class="button primary small" id="runAgent">Run agent session</button>` : ""}
+        ${canRun ? `<button class="button primary small" id="runAgent" data-busy-label="Running…">Run agent session</button>` : ""}
         ${canRun && state.me?.voice && state.me.voice !== "off" ? `<button class="button ghost small" id="requestCall">Request a phone call</button>` : ""}
-        ${canRun && waiting && !simulated ? `<button class="button ghost small" id="resumeAgent">Resume after reply</button>` : ""}
+        ${canRun && waiting && !simulated ? `<button class="button ghost small" id="resumeAgent" data-busy-label="Reading…">Resume after reply</button>` : ""}
         ${c.stage !== "Not started" ? `<button class="button ghost small" id="viewSession">View agent session</button>` : ""}
       </div></div>
     <div class="drawer-tabs" role="tablist" aria-label="Case sections">${TABS.map(([k, label]) => `<button type="button" class="drawer-tab" role="tab" id="tab-${k}" data-tab="${k}" aria-controls="panel-${k}" aria-selected="${k === tab}" tabindex="${k === tab ? 0 : -1}">${label}<span class="tab-count" data-tab-count="${k}" hidden></span></button>`).join("")}</div>
-    ${panel("overview", `<div class="drawer-section"><h3>What we need to know</h3><div id="reqBox"><p class="muted t-sm">Loading…</p></div></div>
+    ${panel("overview", `<div class="drawer-section"><h3>What we need to know</h3><div id="reqBox">${loadingLine()}</div></div>
       <div class="drawer-section"><h3>Participant</h3><dl class="kv">${kv("Phone", c.phone)}${kv("Programme record employer", c.recorded_employer)}${kv("Reported employer", c.employer)}${kv("Case owner", c.owner)}${kv("Mission", missionName(c.mission_version ?? state.missions[0]?.version))}</dl></div>
       ${can("admin") ? `<div class="drawer-section danger-zone"><h3>Danger zone</h3><p class="t-sm muted" style="margin:0 0 10px">Deleting erases this participant's name, number, replies and evidence. The case stays only as an anonymous entry in the audit trail. This cannot be undone.</p><button class="button ghost small" id="deleteCase" style="color:#b64b48;border-color:#b64b48">Delete case…</button></div>` : ""}`)}
-    ${panel("conversation", `<div id="convBox"><p class="muted t-sm">Loading…</p></div>${simulated && can("run") && c.stage !== "Complete" ? `<div style="display:flex;gap:8px;margin-top:10px"><input id="simText" placeholder="Type a participant reply (simulated)" class="t-sm" style="flex:1" /><button class="button primary small" id="simSend">Send</button></div><small class="muted t-xs">WhatsApp is off. This goes through the same conversation logic as a real reply.</small>` : ""}`)}
-    ${panel("calls", `<div id="callBox"><p class="muted t-sm">Loading…</p></div>`)}
-    ${panel("activity", `<div class="drawer-section"><h3>Agent notes</h3><div id="agentBox"><p class="muted t-sm">Loading…</p></div></div>
-      <div class="drawer-section"><h3>Case history</h3><div class="timeline" id="caseHistory"><p class="muted t-sm">Loading…</p></div></div>`)}
+    ${panel("conversation", `<div id="convBox">${loadingLine()}</div>${simulated && can("run") && c.stage !== "Complete" ? `<div style="display:flex;gap:8px;margin-top:10px"><input id="simText" placeholder="Type a participant reply (simulated)" class="t-sm" style="flex:1" /><button class="button primary small" id="simSend" data-busy-label="Sending…">Send</button></div><small class="muted t-xs">WhatsApp is off. This goes through the same conversation logic as a real reply.</small>` : ""}`)}
+    ${panel("calls", `<div id="callBox">${loadingLine()}</div>`)}
+    ${panel("activity", `<div class="drawer-section"><h3>Agent notes</h3><div id="agentBox">${loadingLine()}</div></div>
+      <div class="drawer-section"><h3>Case history</h3><div class="timeline" id="caseHistory">${loadingLine()}</div></div>`)}
   </div>`;
   caseDrawer.classList.add("open"); caseDrawer.setAttribute("aria-hidden", "false"); drawerBackdrop.hidden = false;
   $("closeDrawer").addEventListener("click", closeDrawer);
@@ -447,17 +466,21 @@ async function openCase(id) {
     if (out) { state.session = out.session; openCase(id); }
   });
   $("requestCall")?.addEventListener("click", () => confirmModal({
-    title: "Request a phone call?", text: `This asks for a call to ${c.name}. It goes through the same checks as the agent's calls (consent, contact hours, attempts) and then waits for approval on the Approvals page. Nothing rings until someone approves it.`, button: "Request the call",
+    title: "Request a phone call?", text: `This asks for a call to ${c.name}. It goes through the same checks as the agent's calls (consent, contact hours, attempts) and then waits for approval on the Approvals page. Nothing rings until someone approves it.`, button: "Request the call", busy: "Requesting…",
     onConfirm: async () => { const out = await act(() => api(`/cases/${id}/request-call`, { method: "POST", body: { reason: "Phone call requested by staff" } }), null); if (out) { toast(out.message, "success"); openCase(id); } },
   }));
   $("viewSession")?.addEventListener("click", () => openLastSession(id).catch(e => toast(e.message, "warning")));
   $("deleteCase")?.addEventListener("click", () => openDeleteModal(c));
   fillConversation("convBox", id);
+  let simSending = false;
   const sendSim = async () => {
     const box = $("simText"); const text = box?.value ?? "";
-    box.value = "";
+    if (simSending || !text.trim()) return; // one at a time, and nothing to send is nothing to do
+    simSending = true; box.value = "";
+    try {
     const out = await act(() => api(`/cases/${id}/simulate-reply`, { method: "POST", body: { text } }), null);
     if (out) { toast(`Reply handled: ${out.result.action}${out.result.detail ? " (" + out.result.detail + ")" : ""}`, "success"); openCase(id); }
+    } finally { simSending = false; }
   };
   $("simSend")?.addEventListener("click", sendSim);
   $("simText")?.addEventListener("keydown", e => { if (e.key === "Enter") sendSim(); });
@@ -475,7 +498,7 @@ async function openCase(id) {
 function agentNotesHtml(d) {
   const held = (d.approvals || []).filter(a => a.state === "held");
   const parts = [];
-  if (held.length) parts.push(held.map(a => `<div class="agent-callout" style="margin:0 0 8px"><small>Waiting for approval</small><h3>${esc(a.label)}</h3><p>${esc(a.summary)}</p>${can("approve") ? `<div style="display:flex;gap:6px"><button class="button primary small" data-approve="${esc(a.outbox_id)}">Approve</button><button class="button ghost small" data-reject="${esc(a.outbox_id)}">Decline</button></div>` : ""}</div>`).join(""));
+  if (held.length) parts.push(held.map(a => `<div class="agent-callout" style="margin:0 0 8px"><small>Waiting for approval</small><h3>${esc(a.label)}</h3><p>${esc(a.summary)}</p>${can("approve") ? `<div style="display:flex;gap:6px"><button class="button primary small" data-approve="${esc(a.outbox_id)}" data-busy-label="Approving…">Approve</button><button class="button ghost small" data-reject="${esc(a.outbox_id)}" data-busy-label="Declining…">Decline</button></div>` : ""}</div>`).join(""));
   parts.push(d.memory?.length ? `<div class="check-list">${d.memory.map(m => `<div class="check-item"><span class="check-mark">·</span><span><strong>${esc(m.label)}</strong><small>${esc(m.value)}</small></span></div>`).join("")}</div>` : `<p class="muted t-sm">Nothing remembered about this person yet.</p>`);
   if (d.wakes?.length) parts.push(`<p class="t-sm" style="margin:8px 0 0">The agent will look at this case again: ${d.wakes.map(w => `${esc(istDay(w.at))} ${esc(istTime(w.at))} (${esc(w.reason.replace(/_/g, " "))})`).join("; ")}.</p>`);
   return parts.join("");
@@ -510,7 +533,7 @@ async function simulateCall(id, outcome) {
 const CONV_LABEL = { not_started: "Not started", awaiting_consent: "Waiting for consent", asking: "Asking questions", done: "Interview finished", escalated: "Handed to a person", stopped: "Stopped by participant" };
 async function fillConversation(boxId, caseId) {
   try {
-    const d = await api(`/cases/${caseId}/conversation`);
+    const d = await api(`/cases/${caseId}/conversation`, { silent: true });
     const box = $(boxId); if (!box) return;
     const sig = JSON.stringify(d); // a refresh that brings nothing new leaves the panel (and its scroll position) alone
     if (box.dataset.case === caseId && box.dataset.sig === sig) return;
@@ -604,7 +627,7 @@ const mmss = s => (s == null ? "—" : `${Math.floor(s / 60)}:${String(Math.roun
 
 function renderCalls() {
   const v = state.voice;
-  if (!v) return empty("Loading phone calls…", "Reading the connection and the calls.");
+  if (!v) return loadingState("Loading phone calls…", "Reading the connection and the calls.");
   const [kindTone, kindLabel] = { zolabs: ["ok", "ZoLabs, live"], simulated: ["warn", "Simulator: nobody is rung"], off: ["off", "Not connected"] }[v.kind] || ["off", v.kind];
   const chk = state.voiceCheck;
   const account = chk?.ok ? (typeof chk.account === "string" ? chk.account : chk.account?.email || chk.account?.name || chk.account?.account || JSON.stringify(chk.account).slice(0, 120)) : "";
@@ -614,7 +637,7 @@ function renderCalls() {
   // 1. Status strip: is it working, and who can it reach?
   const tile = (label, value, note, tone, extra = "") => `<div class="pc-tile"><span class="pc-label">${label}</span><strong class="pc-value">${tone ? `<i class="pc-dot ${tone}"></i>` : ""}${esc(value)}</strong><small>${esc(note)}</small>${extra}</div>`;
   const strip = `<section class="pc-strip" aria-label="Phone connection">
-    ${tile("Connection", kindLabel, canCheck ? "Asks ZoLabs who we are signed in as. Places no call and costs nothing." : "", kindTone, canCheck ? `<button type="button" class="button ghost small" data-action="voice-check">Check connection</button>` : "")}
+    ${tile("Connection", kindLabel, canCheck ? "Asks ZoLabs who we are signed in as. Places no call and costs nothing." : "", kindTone, canCheck ? `<button type="button" class="button ghost small" data-action="voice-check" data-busy-label="Checking…">Check connection</button>` : "")}
     ${tile("Calls", v.calls_enabled ? "Switched on" : "Switched off", v.calls_enabled ? "Approved calls are placed by the scheduler." : "Nothing will ring, even when a call is approved.", v.calls_enabled ? "ok" : "off")}
     ${tile("Who can be called", v.who_can_be_called, "Only people who have not opted out, inside the contact hours.", "")}
     ${tile("Finished calls", v.callback_ready ? "ZoLabs rings us back" : "Found by the scheduler", v.callback_ready ? "ZoLabs tells us the moment a call finishes, and we fetch the details ourselves." : "No callback address is set, so results are picked up when the scheduler runs.", "")}
@@ -658,7 +681,7 @@ async function syncCallsNow() {
   if (!state.voice?.calls?.some(k => k.status === "in_progress" || k.status === "scheduled")) return;
   callSyncBusy = true;
   try {
-    const r = await api("/voice/sync", { method: "POST" });
+    const r = await api("/voice/sync", { method: "POST", silent: true });
     if (r.errors?.length && r.errors[0] !== lastSyncError) { lastSyncError = r.errors[0]; toast("Could not check the call at ZoLabs: " + r.errors[0], "warning"); }
     if (r.applied > 0) { await loadAll(); toast(r.applied === 1 ? "A call finished. The answers are on the case." : r.applied + " calls finished. The answers are on the cases.", "success"); }
   } catch { /* try again on the next beat */ } finally { callSyncBusy = false; }
@@ -678,7 +701,7 @@ function renderApprovals() {
   const list = state.approvals, waiting = list.filter(a => a.state === "held"), done = list.filter(a => a.state !== "held");
   const canDecide = can("approve");
   const row = a => `<tr><td><strong>${esc(a.participant)}</strong><small style="display:block;color:var(--muted)">${esc(a.case_id)}</small></td><td>${esc(a.label)}</td><td class="t-sm" style="max-width:420px">${esc(a.summary)}</td><td>${esc(istDay(a.held_at))} ${esc(istTime(a.held_at))}</td>
-    <td>${a.state === "held" ? (canDecide ? `<div style="display:flex;gap:6px"><button class="button primary small" data-approve="${esc(a.outbox_id)}">Approve</button><button class="button ghost small" data-reject="${esc(a.outbox_id)}">Decline</button></div>` : `<small style="color:var(--muted)">Only reviewers, administrators and agent operations can decide.</small>`) : `<span class="status ${approvalState(a.state)[0]}">${esc(approvalState(a.state)[1])}</span><small style="display:block;color:var(--muted)">${esc(a.decided_by || "")} ${a.decided_at ? esc(istTime(a.decided_at)) : ""}${a.note ? " · " + esc(a.note) : ""}</small>`}</td></tr>`;
+    <td>${a.state === "held" ? (canDecide ? `<div style="display:flex;gap:6px"><button class="button primary small" data-approve="${esc(a.outbox_id)}" data-busy-label="Approving…">Approve</button><button class="button ghost small" data-reject="${esc(a.outbox_id)}" data-busy-label="Declining…">Decline</button></div>` : `<small style="color:var(--muted)">Only reviewers, administrators and agent operations can decide.</small>`) : `<span class="status ${approvalState(a.state)[0]}">${esc(approvalState(a.state)[1])}</span><small style="display:block;color:var(--muted)">${esc(a.decided_by || "")} ${a.decided_at ? esc(istTime(a.decided_at)) : ""}${a.note ? " · " + esc(a.note) : ""}</small>`}</td></tr>`;
   const table = rows => `<div style="overflow-x:auto"><table class="data-table"><thead><tr><th>Person</th><th>What</th><th>Details</th><th>Proposed</th><th></th></tr></thead><tbody>${rows.map(row).join("")}</tbody></table></div>`;
   return `${pageHead("Approvals", "A person says yes first.", "Some things the agent proposes are held until someone approves them. Nothing here is sent or placed until you do. You choose which kinds of action need this on the Controls tab of the Claude engine page.")}
     <section class="card card-pad"><div class="card-head"><div><h2>Waiting for you</h2><p>Approve to release it, or decline to stop it and send the case to a person</p></div><span class="status ${waiting.length ? "review" : "confirmed"}">${waiting.length}</span></div>
@@ -691,7 +714,7 @@ async function decideApproval(id, decision) {
 
 function renderControls() {
   const k = state.controlsInfo;
-  if (!k) return empty("Loading the controls…", "Reading the current settings.");
+  if (!k) return loadingState("Loading the controls…", "Reading the current settings.");
   const c = k.controls, canChange = k.can_change, stat = Object.fromEntries(k.stats.map(s => [s.kind, s]));
   const dial = k.actions.map(a => { const s = stat[a.kind]; return `<tr><td><strong>${esc(a.label)}</strong><small style="display:block;color:var(--muted)">${esc(ACTION_NOTE[a.kind])}</small></td>
     <td><select class="filter-select" data-dial="${esc(a.kind)}" ${canChange ? "" : "disabled"} aria-label="${esc(a.label)}"><option value="approve_first" ${c.autonomy[a.kind] === "approve_first" ? "selected" : ""}>A person approves first</option><option value="automatic" ${c.autonomy[a.kind] === "automatic" ? "selected" : ""}>Automatic</option></select></td>
@@ -710,7 +733,7 @@ function renderControls() {
         <div class="field"><label for="limCase">Most on one case, in total (USD)</label><input id="limCase" type="number" min="0" step="0.1" value="${esc(c.case_budget_usd)}" ${canChange ? "" : "disabled"} /></div>
         <div class="field"><label for="limWakes">Most wake-ups on one case</label><input id="limWakes" type="number" min="1" step="1" value="${esc(c.max_wakes_per_case)}" ${canChange ? "" : "disabled"} /></div>
       </div>
-      ${canChange ? `<div style="margin-top:10px"><button class="button primary small" data-action="save-limits">Save limits</button></div>` : ""}
+      ${canChange ? `<div style="margin-top:10px"><button class="button primary small" data-action="save-limits" data-busy-label="Saving…">Save limits</button></div>` : ""}
       <small class="muted t-xs" style="display:block;margin-top:8px">Amounts use indicative prices. ${plural(k.pending_wakes, "wake-up")} are set for later.${c.updated_by ? ` Last changed by ${esc(c.updated_by)}.` : ""}</small></section>`;
 }
 async function saveControls(patch, okMessage) { await act(() => api("/controls", { method: "POST", body: patch }), okMessage); }
@@ -785,7 +808,7 @@ const listText = (label, items) => (items && items.length ? `<div class="config-
 
 function renderEmployee() {
   const e = state.employeeDef;
-  if (!e) return empty("Loading the employee…", "Reading the current version.");
+  if (!e) return loadingState("Loading the employee…", "Reading the current version.");
   const info = state.employees.find(x => x.version === e.version);
   const versions = state.employees.map(x => `<button class="review-item ${x.version === e.version ? "active" : ""}" data-employee="${esc(x.version)}"><div class="review-item-top"><strong>${esc(x.name)} · ${esc(x.version)}</strong><span class="t-xs muted">${x.current ? "current" : "older"}</span></div><p>${x.builtin ? "Built in" : "Added " + esc(istDay(x.created_at))}. ${plural(x.missions_using, "mission")} use it.</p></button>`).join("");
   const mission = state.ctxPreview?.mission_version || state.defaultMission;
@@ -811,7 +834,7 @@ function openEmployeeModal() {
         <div class="field full"><label for="eText">Definition (JSON)</label><textarea id="eText" rows="16" spellcheck="false" class="mono t-xs" placeholder="Copy the current version, then change the version name and what you want to improve.">${esc(s.text)}</textarea><small>Change version at least. The platform's safety rules apply whatever is written here, and allowed_tools limits what the agent may do.</small></div>
         ${s.error ? `<p class="danger-text t-sm" style="grid-column:1/-1;margin:0;white-space:pre-wrap">${esc(s.error)}</p>` : ""}
       </div></div>
-      <div class="modal-foot"><button class="button ghost" id="cancelE">Cancel</button><button class="button primary" id="saveE" ${s.running || !s.text.trim() ? "disabled" : ""}>Save version</button></div>`;
+      <div class="modal-foot"><button class="button ghost" id="cancelE">Cancel</button><button class="button primary" id="saveE" data-busy-label="Saving…" ${s.running || !s.text.trim() ? "disabled" : ""}>Save version</button></div>`;
     $("closeModal").addEventListener("click", closeModal); $("cancelE").addEventListener("click", closeModal);
     $("eLoad").addEventListener("click", () => { const { created_at, created_by, ...def } = state.employeeDef || {}; s.text = JSON.stringify(def, null, 2); s.error = null; draw(); });
     $("eText").addEventListener("input", e => { s.text = e.target.value; $("saveE").disabled = !s.text.trim(); });
@@ -861,35 +884,49 @@ const field = (l, v) => `<div class="inspector-field"><small>${esc(l)}</small><s
 // ---- mission (read only) ---------------------------------------------------------------------------------------------------------------
 // ---- the questionnaire wording: read it, and sign it off --------------------------------------------------------------------------------
 // Everything a participant will be sent, in the order they will see it. Reading it here is what a sign-off is based on.
+// The messages that are not questions: the fixed replies and the answers to common questions. Read only, folded away.
 function wordingHtml(ins) {
-  const label = id => { const q = ins.questions.find(x => x.id === id); return q ? q.id : id; };
-  const opt = q => (q.type === "yesno" ? ["Yes", "No"] : (q.options || []).map(o => o.label));
-  const qhtml = q => `<div class="check-item" style="align-items:flex-start"><span class="check-mark">${esc(String(ins.questions.indexOf(q) + 1))}</span><span><strong>${esc(q.text)}</strong>
-      <small>${q.type === "text" ? "Free text answer" : "Choose: " + esc(opt(q).join(" / "))}. Saved as <code>${esc(q.evidence_key)}</code>.${q.spoken ? ` On a phone call: “${esc(q.spoken)}”.` : ""}${q.next?.length ? " Then: " + q.next.map(n => (n.when ? `if “${esc(n.when.equals)}”` : "otherwise") + " go to " + (n.goto ? esc(label(n.goto)) : "the end")).join("; ") + "." : ""}</small></span></div>`;
-  const byModule = new Map();
-  for (const q of ins.questions) { if (!byModule.has(q.module)) byModule.set(q.module, []); byModule.get(q.module).push(q); }
   const fixed = [["Opening after they agree", ins.start_message], ["Closing", ins.closing_message], ["When we could not understand", ins.reask_prefix], ["When they hand over to a person", ins.handover_message], ["Wrong person", ins.wrong_person_message], ["Someone in distress", ins.distress_message], ["Asking for data to be deleted", ins.deletion_message], ["Not a text message", ins.unsupported_prefix]];
-  return `<div style="margin-top:10px">${[...byModule.entries()].map(([mod, qs]) => `<h3 class="t-md" style="margin:14px 0 4px">${esc(mod.replace(/_/g, " "))}</h3><div class="check-list">${qs.map(qhtml).join("")}</div>`).join("")}
+  return `<details class="q-more" style="margin-top:14px"><summary class="t-sm" style="cursor:pointer"><strong>Fixed messages and answers to common questions</strong> (${fixed.length} messages, ${ins.faq.length} answers)</summary>
     <h3 class="t-md" style="margin:14px 0 4px">Fixed messages</h3><div class="check-list">${fixed.map(([t, v]) => `<div class="check-item"><span class="check-mark">·</span><span><strong>${esc(t)}</strong><small>${esc(v)}</small></span></div>`).join("")}</div>
-    <h3 class="t-md" style="margin:14px 0 4px">Answers to common questions (${ins.faq.length})</h3><div class="check-list">${ins.faq.map(f => `<div class="check-item"><span class="check-mark">·</span><span><strong>${esc(f.keywords.join(", "))}</strong><small>${esc(f.answer)}</small></span></div>`).join("")}</div></div>`;
+    <h3 class="t-md" style="margin:14px 0 4px">Answers to common questions (${ins.faq.length})</h3><div class="check-list">${ins.faq.map(f => `<div class="check-item"><span class="check-mark">·</span><span><strong>${esc(f.keywords.join(", "))}</strong><small>${esc(f.answer)}</small></span></div>`).join("")}</div></details>`;
 }
 function wordingCard(m) {
   const w = state.wordingFor === m.version ? state.wording : null;
   const so = m.signed_off;
+  const editable = !m.instrument_signed_off && can("admin");
   const status = m.instrument_signed_off
     ? `<span class="status confirmed">Signed off${so ? ` by ${esc(so.by)} on ${esc(istDay(so.at))}` : ""}</span>`
     : `<span class="status review">Draft: not signed off</span>`;
-  const signBtn = !m.instrument_signed_off && can("admin") ? `<button class="button primary small" data-action="sign-off">Sign off this wording</button>` : "";
+  const signBtn = editable && w ? `<button class="button primary small" data-action="sign-off">Sign off this wording</button>` : "";
   const explain = m.instrument_signed_off
     ? `<p class="t-sm" style="margin:8px 0">This wording was approved for real participants. It cannot be edited: a change is a new version, which has to be signed off again.</p>`
-    : `<p class="t-sm" style="margin:8px 0">Until someone signs this wording off, the interview will not continue on its own with real participants: every reply is handed to a person. Read every question and message below, then sign off.${can("admin") ? "" : " Only an administrator can sign off."}</p>`;
-  return `<section class="card card-pad" style="margin-top:16px"><div class="card-head"><div><h2>Questionnaire wording</h2><p>Every question and message a participant will receive</p></div>${status}</div>
+    : `<p class="t-sm" style="margin:8px 0">Read every question as it will be asked on WhatsApp and on a phone call${editable ? ". Edit, remove or add questions here, then sign off. What you sign off is exactly what the agent will use" : ""}. Until someone signs this wording off, the interview will not continue on its own with real participants: every reply is handed to a person.${can("admin") ? "" : " Only an administrator can sign off."}</p>`;
+  const load = w || state.wordingLoading ? "" : `<button class="button ghost small" data-action="read-wording" data-busy-label="Opening…">${editable ? "Review and edit the questions" : "Read the questionnaire"} (${esc(m.questions_total)} questions)</button>`;
+  return `<section class="card card-pad" style="margin-top:16px"><div class="card-head"><div><h2>Questionnaire wording</h2><p>Every question and message a participant will receive, on WhatsApp and on a call</p></div>${status}</div>
     ${explain}
-    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="button ghost small" data-action="read-wording">${w ? "Refresh" : "Read the questionnaire"} (${esc(m.questions_total)} questions)</button>${signBtn}</div>${w ? wordingHtml(w.definition.instrument) : ""}</section>`;
+    <div style="display:flex;gap:8px;flex-wrap:wrap">${load}${signBtn}</div>${w ? `<div id="qEditorMount" style="margin-top:12px"></div>${wordingHtml(w.definition.instrument)}` : state.wordingLoading ? `<div style="margin-top:12px">${loadingLine("Opening the questions…")}</div>` : ""}</section>`;
 }
 async function loadWording(version) {
-  try { state.wording = await api("/missions/" + encodeURIComponent(version) + "/definition"); state.wordingFor = version; render(); }
-  catch (e) { toast(e.message, "warning"); }
+  if (state.wordingLoading) return;
+  state.wordingLoading = true; state.wordingFailedFor = null;
+  render(); // draws the "opening the questions" line
+  try {
+    const d = await api("/missions/" + encodeURIComponent(version) + "/definition");
+    const m = state.missionShown ?? state.mission;
+    state.wording = d; state.wordingFor = version;
+    state.qeditor = createQuestionEditor({ def: d.definition, canEdit: !m.instrument_signed_off && can("admin"), check: def => api("/missions/check", { method: "POST", body: def, silent: true }), onChange: syncSignOff });
+    render(); state.qeditor.runCheck();
+  } catch (e) { state.wordingFailedFor = version; toast(e.message, "warning"); } // do not try again by itself: the button is back for a person to press
+  finally { state.wordingLoading = false; if (state.wordingFor !== version) render(); }
+}
+/** The Sign off button follows the editor: not while a question is open for editing, not while there are problems, and it says when there are changes. */
+function syncSignOff() {
+  const b = document.querySelector('[data-action="sign-off"]'), ed = state.qeditor;
+  if (!b || !ed) return;
+  const why = ed.isBusy() ? "Save or cancel the question you are editing first." : !ed.isChecked() ? "Checking the questions…" : ed.problems().length ? "Fix the problems listed above first." : "";
+  b.disabled = !!why; b.title = why;
+  b.textContent = ed.isChanged() ? "Sign off with my changes" : "Sign off this wording";
 }
 
 // ---- Mission Studio: write a mission as a plain brief, let the drafter structure it, read it, save it as a draft ---------------------------------------------
@@ -903,7 +940,7 @@ function openStudioModal() {
     return out;
   };
   // ---- the form screen -------------------------------------------------------------------------------------------------------------
-  const STUDIO_STEPS = ["Describe", "Draft", "Read", "Save"];
+  const STUDIO_STEPS = ["Describe", "Draft", "Review", "Save"];
   const LIMITS = { name: [3, 100], programme_name: [1, 80], goal: [20, 1500], people: [10, 1000], find_out: [10, 3000], approach: [0, 1500] }; // the same limits the server checks
   const hourLabel = h => (h === 24 ? "12:00 am (end of day)" : `${Math.floor(h) % 12 || 12}:${h % 1 ? "30" : "00"} ${h < 12 ? "am" : "pm"}`);
   const hourSelect = (id, value, label) => `<select id="${id}" aria-label="${label}"><option value="">Usual</option>${Array.from({ length: 49 }, (_, i) => i / 2).map(h => `<option value="${h}" ${String(h) === String(value) ? "selected" : ""}>${hourLabel(h)}</option>`).join("")}</select>`;
@@ -992,7 +1029,7 @@ function openStudioModal() {
       s.problems = briefProblems(s.brief); s.error = null;
       if (s.problems.length) { drawBrief(); modal.querySelector(".modal-body").scrollTop = 0; return; } // say what is missing before sending anything
       s.running = true; drawBrief(); // lock the button at once: drafting takes a while and a second click would start a second draft
-      try { s.result = await api("/missions/draft", { method: "POST", body: read() }); s.step = "review"; s.running = false; drawReview(); }
+      try { s.result = await api("/missions/draft", { method: "POST", body: read() }); s.editor = null; s.step = "review"; s.running = false; drawReview(); }
       catch (e) { s.running = false; s.error = e.message; drawBrief(); }
     });
   };
@@ -1000,28 +1037,43 @@ function openStudioModal() {
     modal.classList.remove("modal-sticky");
     const r = s.result, d = r.definition;
     const need = d ? d.evidence_requirements.map(x => `<div class="check-item"><span class="check-mark">${x.required === false ? "○" : "●"}</span><span><strong>${esc(x.label)}</strong><small>${x.required === false ? "Optional" : "Required"}${x.when ? `, only if <code>${esc(x.when.key)}</code> is ${esc(x.when.in.join(" or "))}` : ""}${x.verify_against ? ", checked against the programme record" : ""}.${x.hint ? " " + esc(x.hint) : ""}</small></span></div>`).join("") : "";
-    modal.innerHTML = `<div class="modal-head"><div><h2 id="modalTitle">${d ? "Read the draft" : "The draft could not be made"}</h2><p>${d ? `Drafted ${r.source === "claude" ? "by Claude" : "as a plain starting point (no model key is set)"}${r.attempts > 1 ? ` after ${r.attempts} attempts` : ""}. Nothing is saved yet. It will be saved as draft wording: nobody is contacted until a person signs it off.` : "Fix the brief or add detail, then try again."}</p></div><button class="close-button" id="closeModal" aria-label="Close">×</button></div>
+    modal.innerHTML = `<div class="modal-head"><div><h2 id="modalTitle">${d ? "Review the questions" : "The draft could not be made"}</h2><p>${d ? `Drafted ${r.source === "claude" ? "by Claude" : "as a plain starting point (no model key is set)"}${r.attempts > 1 ? ` after ${r.attempts} attempts` : ""}. Nothing is saved yet. It will be saved as draft wording: nobody is contacted until a person signs it off.` : "Fix the brief or add detail, then try again."}</p></div><button class="close-button" id="closeModal" aria-label="Close">×</button></div>
       <div class="modal-body" style="max-height:60vh;overflow:auto">
-        ${r.problems.length ? `<div class="agent-callout" style="border-color:#b64b48"><small>${d ? "Check these" : "Problems"}</small><h3>${esc(r.problems[0])}</h3>${r.problems.length > 1 ? `<p>${r.problems.slice(1, 6).map(esc).join("<br>")}</p>` : ""}</div>` : ""}
+        ${r.problems.length && !d ? `<div class="agent-callout" style="border-color:#b64b48"><small>Problems</small><h3>${esc(r.problems[0])}</h3>${r.problems.length > 1 ? `<p>${r.problems.slice(1, 6).map(esc).join("<br>")}</p>` : ""}</div>` : ""}
         ${r.notes.length ? `<div class="agent-callout"><small>Assumptions to check</small><p>${r.notes.map(esc).join("<br>")}</p></div>` : ""}
         ${d ? `<h3 class="t-md" style="margin:14px 0 4px">Goal</h3><p class="t-md" style="margin:0">${esc(d.objective)}</p>
-          <h3 class="t-md" style="margin:14px 0 4px">What the employee will find out</h3><div class="check-list">${need}</div>
           <h3 class="t-md" style="margin:14px 0 4px">Results it can end with</h3>${resultsHtml(d.outcomes, d.verdict_labels)}
           ${d.strategy ? `<h3 class="t-md" style="margin:14px 0 4px">Approach</h3><p class="t-sm" style="margin:0">Channels in order: ${d.strategy.channels.map(c => (c === "voice" ? "phone call" : "WhatsApp")).join(", then ")}. Follow up after about ${esc(d.strategy.follow_up_after_hours)} hours of silence.${d.agent_guidance ? " " + esc(d.agent_guidance) : ""}</p>` : ""}
+          <h3 class="t-md" style="margin:18px 0 4px">Questions</h3>
+          <p class="t-sm" style="margin:0 0 10px">Read each question as it will be asked on WhatsApp and on a phone call. Edit, remove or add anything you need. Nothing is saved until you save the mission.</p>
+          <div id="qEditor"></div>
+          <details class="q-more" style="margin-top:14px"><summary class="t-sm" style="cursor:pointer"><strong>What the employee will find out</strong> (${d.evidence_requirements.length})</summary><div class="check-list" style="margin-top:8px">${need}</div></details>
           ${wordingHtml(d.instrument)}` : ""}
       </div>
-      <div class="modal-foot"><button class="button ghost" id="backS">← Edit the brief</button>${d ? `<button class="button ghost" id="jsonS">Edit as JSON</button><button class="button primary" id="saveS" ${s.running ? "disabled" : ""}>${s.running ? "Saving…" : "Save as a draft mission"}</button>` : ""}</div>`;
+      <div class="modal-foot"><button class="button ghost" id="backS">← Edit the brief</button>${d ? `<button class="button primary" id="saveS" ${s.running ? "disabled" : ""}>${s.running ? "Saving…" : "Save as a draft mission"}</button>` : ""}</div>`;
     $("closeModal").addEventListener("click", closeModal);
     $("backS").addEventListener("click", () => { s.step = "brief"; drawBrief(); });
-    $("jsonS")?.addEventListener("click", () => { closeModal(); openMissionModal(JSON.stringify(d, null, 2)); });
+    // The save button follows the editor: not while a question is open for editing, and not while there are problems.
+    const syncSave = () => {
+      const b = $("saveS"), ed = s.editor; if (!b || !ed) return;
+      const why = ed.isBusy() ? "Save or cancel the question you are editing first." : !ed.isChecked() ? "Checking the questions…" : ed.problems().length ? "Fix the problems listed above first." : "";
+      b.disabled = s.running || !!why; b.title = why;
+    };
+    if (d) {
+      s.editor ??= createQuestionEditor({ def: d, check: def => api("/missions/check", { method: "POST", body: def, silent: true }), onChange: syncSave });
+      s.editor.mount($("qEditor"));
+      if (!s.editor.isChecked()) s.editor.runCheck();
+      syncSave();
+    }
     $("saveS")?.addEventListener("click", async () => {
-      if (s.running) return;
+      if (s.running || !s.editor) return;
+      const edited = s.editor.getDef();
       s.running = true; drawReview();
       try {
-        const out = await api("/missions", { method: "POST", body: d });
-        closeModal(); state.missionShown = null; state.wording = null; state.wordingFor = null; state.voiceFormFor = null; await loadAll();
+        const out = await api("/missions", { method: "POST", body: edited });
+        closeModal(); state.missionShown = null; state.wording = null; state.wordingFor = null; state.qeditor = null; state.voiceFormFor = null; await loadAll();
         state.missionShown = await api("/mission?version=" + encodeURIComponent(out.mission.version)); render();
-        toast("Saved as a draft mission. Read the wording on this page and sign it off before contacting anyone.", "success");
+        toast("Saved as a draft mission. Review the questions on this page and sign off before contacting anyone.", "success");
       } catch (e) { s.running = false; s.error = e.message; toast(e.message, "warning"); drawReview(); }
     });
   };
@@ -1054,7 +1106,7 @@ function voiceCard(m) {
   const note = !v ? "" : v.link ? `<p class="t-sm" style="margin:8px 0">Published as form ${esc(v.link.form_id)} on ${esc(istDay(v.link.published_at))} ${esc(istTime(v.link.published_at))} by ${esc(v.link.published_by)}.${v.in_sync ? "" : " The mission or the employee has changed since, so the voice agent is working from older instructions. Publish again to update it."}</p>` : `<p class="t-sm" style="margin:8px 0">Nothing is published yet, so the agent cannot ask for a phone call on this mission.</p>`;
   const fields = !v ? "" : `<details style="margin-top:8px"><summary class="t-sm" style="cursor:pointer"><strong>What the voice agent is told</strong> (instructions and ${v.definition.form_fields.length} fields)</summary><pre class="mono t-xs" style="white-space:pre-wrap;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px;margin:6px 0">${esc(v.definition.start_message + "\n\n" + v.definition.form_context)}</pre>
     <div style="overflow-x:auto"><table class="data-table"><thead><tr><th>Field</th><th>Type</th><th>What it asks</th></tr></thead><tbody>${v.definition.form_fields.map(f => `<tr><td><code>${esc(f.field_id)}</code><small style="display:block;color:var(--muted)">${esc(f.field_name)}</small></td><td>${esc(f.datatype)}</td><td class="t-xs">${esc(f.additional_info)}</td></tr>`).join("")}</tbody></table></div></details>`;
-  const buttons = off ? "" : `<button class="button ghost small" data-action="voice-preview">${v ? "Refresh the preview" : "Preview the phone form"}</button>${v && state.employeeCanEdit ? (state.voicePublishing ? `<button class="button primary small" disabled>Publishing… this can take a minute</button>` : v.link && v.in_sync ? "" : `<button class="button primary small" data-action="voice-publish">${v.link ? "Update at ZoLabs" : "Create at ZoLabs"}</button>`) : ""}`;
+  const buttons = off ? "" : `<button class="button ghost small" data-action="voice-preview" data-busy-label="Loading…">${v ? "Refresh the preview" : "Preview the phone form"}</button>${v && state.employeeCanEdit ? (state.voicePublishing ? `<button class="button primary small" disabled>Publishing… this can take a minute</button>` : v.link && v.in_sync ? "" : `<button class="button primary small" data-action="voice-publish">${v.link ? "Update at ZoLabs" : "Create at ZoLabs"}</button>`) : ""}`;
   return `<section class="card card-pad" style="margin-top:16px"><div class="card-head"><div><h2>Phone calls (ZoLabs)</h2><p>The form the voice agent follows for this mission. A person publishes it; the agent only asks for calls.</p></div>${status}</div>
     ${off ? `<p class="muted t-sm">Phone calls are not switched on for this platform yet.</p>` : `${note}<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">${buttons}</div>${fields}`}
     ${state.me?.voice === "simulated" ? `<small class="muted t-xs" style="display:block;margin-top:8px">Simulator: nobody is rung. Use the case page to finish a call yourself.</small>` : ""}</section>`;
@@ -1110,7 +1162,7 @@ function renderAudit() {
   const q = state.auditSearch.toLowerCase();
   const actorOf = a => (a.actor === "Claude agent" ? "agent" : /^(admin|operator|reviewer|agent_ops)/.test(a.actor) ? "human" : ["interakt", "whatsapp", "voice"].includes(a.actor) ? "channel" : "system");
   const list = state.audits.filter(a => (state.auditActor === "all" || actorOf(a) === state.auditActor) && `${a.action} ${a.detail} ${a.actor}`.toLowerCase().includes(q));
-  return `${pageHead("Audit trail", "Every change has an actor and a reason.", "A tamper-evident record of what the system, the agent and people did. Deleted cases remain only as anonymous entries.", `<button class="button ghost" data-action="verify-ledger">Verify integrity</button><button class="button primary" data-action="export-audit">Export CSV</button>`)}
+  return `${pageHead("Audit trail", "Every change has an actor and a reason.", "A tamper-evident record of what the system, the agent and people did. Deleted cases remain only as anonymous entries.", `<button class="button ghost" data-action="verify-ledger" data-busy-label="Verifying…">Verify integrity</button><button class="button primary" data-action="export-audit">Export CSV</button>`)}
     <div class="audit-toolbar"><label class="search-box"><input id="auditSearch" value="${esc(state.auditSearch)}" placeholder="Search events" aria-label="Search audit events" /></label>
       <select class="filter-select" id="auditActor">${[["all", "All actors"], ["human", "People"], ["agent", "Agent"], ["system", "System"], ["channel", "WhatsApp"]].map(([v, l]) => `<option value="${v}" ${state.auditActor === v ? "selected" : ""}>${l}</option>`).join("")}</select></div>
     <section class="card audit-list">${list.map(a => `<div class="audit-row"><span class="audit-time"><strong>${esc(a.time)}</strong><small>${esc(a.date)}</small></span><span class="event-dot ${a.tone === "coral" ? "coral" : ""}">${esc(a.icon)}</span><span class="audit-action"><strong>${esc(a.action)}</strong><small>${esc(a.detail)}</small></span><span class="actor-pill"><span>${esc(a.actorCode)}</span>${esc(a.actor)}</span><span class="hash">${esc(a.hash)}</span></div>`).join("") || empty("No events", state.audits.length ? "Nothing matches the search." : "Events appear here as the system works.")}</section>`;
@@ -1195,7 +1247,7 @@ function openDeleteMissionModal(m) {
       <div class="field full"><p class="t-sm" style="margin:0">${used ? `<b>${plural(used, "participant")}</b> use this mission, so it cannot be deleted until they are deleted. ` : ""}A mission that has participants or campaigns is kept, because their history points at it. The phone form made for it stays in ZoLabs (ZoLabs has no way to delete it): switch it off there if you do not want it.</p></div>
       <div class="field full"><label for="delMConfirm">Type <b>${esc(m.version)}</b> to confirm</label><input id="delMConfirm" autocomplete="off" /></div>
       <p id="delMError" style="color:#b64b48;font-size:12px;grid-column:1/-1;margin:0;white-space:pre-wrap"></p></div></div>
-    <div class="modal-foot"><button class="button ghost" id="cancelDelM">Cancel</button><button class="button primary" id="confirmDelM" disabled style="background:#b64b48;border-color:#b64b48">Delete mission</button></div>`;
+    <div class="modal-foot"><button class="button ghost" id="cancelDelM">Cancel</button><button class="button primary" id="confirmDelM" data-busy-label="Deleting…" disabled style="background:#b64b48;border-color:#b64b48">Delete mission</button></div>`;
   modalBackdrop.hidden = false;
   $("closeModal").addEventListener("click", closeModal); $("cancelDelM").addEventListener("click", closeModal);
   $("delMConfirm").addEventListener("input", e => { $("confirmDelM").disabled = e.target.value.trim() !== m.version; });
@@ -1203,7 +1255,7 @@ function openDeleteMissionModal(m) {
     $("confirmDelM").disabled = true;
     try {
       await api(`/missions/${encodeURIComponent(m.version)}/delete`, { method: "POST", body: { confirm: m.version } });
-      closeModal(); state.missionShown = null; state.wording = null; state.wordingFor = null; state.voiceFormFor = null; await loadAll();
+      closeModal(); state.missionShown = null; state.wording = null; state.wordingFor = null; state.qeditor = null; state.voiceFormFor = null; await loadAll();
       toast(`${m.version} deleted.`, "success");
     } catch (e) { $("delMError").textContent = e.message; $("confirmDelM").disabled = false; }
   });
@@ -1214,7 +1266,7 @@ function openDeleteModal(c) {
       <div class="field full"><p class="t-sm" style="margin:0">Erased: name, phone number, employer, replies, evidence values, agent notes and step records. Kept: an anonymous entry in the audit trail saying who deleted the case and when. Any message still queued is cancelled.</p></div>
       <div class="field full"><label for="delReason">Reason</label><select id="delReason"><option value="participant_request">Participant asked for their data to be deleted</option><option value="data_entry_error">Added by mistake</option><option value="test_data">Test data</option><option value="other">Other</option></select></div>
       <div class="field full"><label for="delConfirm">Type <b>${esc(c.id)}</b> to confirm</label><input id="delConfirm" autocomplete="off" /></div></div></div>
-    <div class="modal-foot"><button class="button ghost" id="cancelDelete">Cancel</button><button class="button primary" id="confirmDelete" disabled style="background:#b64b48;border-color:#b64b48">Delete case</button></div>`;
+    <div class="modal-foot"><button class="button ghost" id="cancelDelete">Cancel</button><button class="button primary" id="confirmDelete" data-busy-label="Deleting…" disabled style="background:#b64b48;border-color:#b64b48">Delete case</button></div>`;
   modalBackdrop.hidden = false;
   $("closeModal").addEventListener("click", closeModal); $("cancelDelete").addEventListener("click", closeModal);
   $("delConfirm").addEventListener("input", e => { $("confirmDelete").disabled = e.target.value.trim() !== c.id; });
@@ -1228,7 +1280,7 @@ function openDeleteModal(c) {
 function openPurgeModal() {
   modal.innerHTML = `<div class="modal-head"><div><h2 id="modalTitle">Delete ALL data?</h2><p>Every case, participant, event, session and message record is removed. This cannot be undone.</p></div><button class="close-button" id="closeModal" aria-label="Close">×</button></div>
     <div class="modal-body"><div class="form-grid"><div class="field full"><label for="purgeConfirm">Type <b>DELETE ALL DATA</b> to confirm</label><input id="purgeConfirm" autocomplete="off" /></div></div></div>
-    <div class="modal-foot"><button class="button ghost" id="cancelPurge">Cancel</button><button class="button primary" id="confirmPurge" disabled style="background:#b64b48;border-color:#b64b48">Delete everything</button></div>`;
+    <div class="modal-foot"><button class="button ghost" id="cancelPurge">Cancel</button><button class="button primary" id="confirmPurge" data-busy-label="Deleting…" disabled style="background:#b64b48;border-color:#b64b48">Delete everything</button></div>`;
   modalBackdrop.hidden = false;
   $("closeModal").addEventListener("click", closeModal); $("cancelPurge").addEventListener("click", closeModal);
   $("purgeConfirm").addEventListener("input", e => { $("confirmPurge").disabled = e.target.value !== "DELETE ALL DATA"; });
@@ -1287,7 +1339,7 @@ function action(name) {
     confirmModal({
       title: update ? "Update the phone form at ZoLabs?" : "Create the phone form at ZoLabs?",
       text: `${update ? "This brings the existing form up to date with the mission and the employee." : "This creates the form and uses ZoLabs quota."} Review the preview first: it is exactly what will be sent. No call is placed by this.`,
-      button: update ? "Update the form" : "Create the form",
+      button: update ? "Update the form" : "Create the form", busy: update ? "Updating…" : "Creating…",
       onConfirm: async () => {
         if (state.voicePublishing) return;
         state.voicePublishing = true; render(); // the button locks at once: ZoLabs is slow, and a second click would create a second form
@@ -1312,20 +1364,23 @@ function action(name) {
   if (name === "voice-check") checkVoice();
   if (name === "read-wording") loadWording((state.missionShown ?? state.mission).version);
   if (name === "sign-off") {
-    const m = state.missionShown ?? state.mission;
+    const m = state.missionShown ?? state.mission, ed = state.qeditor;
+    if (ed?.isBusy()) { toast("Save or cancel the question you are editing first.", "warning"); return; }
+    if (ed && ed.problems().length) { toast("Fix the problems listed above before signing off.", "warning"); return; }
+    const edits = ed?.isChanged() ? { instrument: ed.getDef().instrument, evidence_requirements: ed.getDef().evidence_requirements } : undefined;
     confirmModal({
       title: "Sign off this wording?",
-      text: `By signing off you confirm that someone responsible for the programme has read every question and message and approves them for real participants. This saves a new version of the mission (${m.version}-signed) with your name and the time on it. New participants and campaigns use it; people already loaded stay on the current version. You will need to publish the phone form for the new version.`,
-      button: "I have read it. Sign off",
+      text: `${edits ? "Your changes to the questions are included. " : ""}By signing off you confirm that someone responsible for the programme has read every question and message and approves them for real participants. This approves this mission as it is now. It does not create a second mission. Your name and the time are recorded on it, and after that it cannot be changed. People already loaded on it will follow the approved questions. If you use phone calls, publish the phone form again.`,
+      button: "I have read it. Sign off", busy: "Signing off…",
       onConfirm: async () => {
-        const out = await act(() => api("/missions/" + encodeURIComponent(m.version) + "/sign-off", { method: "POST", body: { confirm: true } }), null);
-        if (out) { state.missionShown = null; state.wording = null; state.wordingFor = null; state.voiceFormFor = null; await loadAll(); state.missionShown = await api("/mission?version=" + encodeURIComponent(out.mission.version)); render(); toast("Signed off as " + out.mission.version + ". The interview now continues on its own for participants on this version.", "success"); }
+        const out = await act(() => api("/missions/" + encodeURIComponent(m.version) + "/sign-off", { method: "POST", body: edits ? { confirm: true, edits } : { confirm: true } }), null);
+        if (out) { state.missionShown = null; state.wording = null; state.wordingFor = null; state.qeditor = null; state.voiceFormFor = null; await loadAll(); state.missionShown = await api("/mission?version=" + encodeURIComponent(out.mission.version)); render(); toast("Signed off. The interview now continues on its own for participants on this mission.", "success"); }
       },
     });
   }
   if (name === "close-session") { state.session = null; state.replay = null; render(); }
-  if (name === "pause-platform") confirmModal({ title: "Switch everything off?", text: "No message will be sent, no call placed, no campaign queued and the agent will not be woken until you switch it back on. Replies are still recorded.", button: "Switch everything off", onConfirm: () => saveControls({ paused: true, reason: "Switched off from the console" }, "Everything is switched off.") });
-  if (name === "resume-platform") confirmModal({ title: "Switch back on?", text: "Queued messages and calls go out on the next scheduler pass, and timers that came due are acted on. Check the queue first if something wrong was going out.", button: "Switch back on", onConfirm: () => saveControls({ paused: false }, "Back on.") });
+  if (name === "pause-platform") confirmModal({ title: "Switch everything off?", text: "No message will be sent, no call placed, no campaign queued and the agent will not be woken until you switch it back on. Replies are still recorded.", button: "Switch everything off", busy: "Switching off…", onConfirm: () => saveControls({ paused: true, reason: "Switched off from the console" }, "Everything is switched off.") });
+  if (name === "resume-platform") confirmModal({ title: "Switch back on?", text: "Queued messages and calls go out on the next scheduler pass, and timers that came due are acted on. Check the queue first if something wrong was going out.", button: "Switch back on", busy: "Switching on…", onConfirm: () => saveControls({ paused: false }, "Back on.") });
   if (name === "save-limits") saveControls({ daily_budget_usd: Number($("limDaily").value), case_budget_usd: Number($("limCase").value), max_wakes_per_case: Number($("limWakes").value) }, "Limits saved.");
   if (name === "export-cases") {
     const rows = filteredCases().map(c => [c.id, c.cohort, c.location, c.status_label || STATUS_LABEL[c.status], c.outcome, c.confidence, c.attempts, c.lastTouch]);

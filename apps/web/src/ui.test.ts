@@ -522,19 +522,23 @@ describe("the live app", () => {
 
   it("shows the questionnaire wording and signs it off from the Mission page", async () => {
     click(q(".nav-item[data-view=\"missions\"]"));
-    await wait(() => !!q("[data-action=\"read-wording\"]"), "the wording card");
+    await wait(() => !!q("#qEditorMount .q-card"), "the questions open by themselves", 6000);   // no click needed to read an unsigned mission
     expect(text()).toContain("Draft: not signed off");
     expect(text()).toContain("every reply is handed to a person");
-    click(q("[data-action=\"read-wording\"]"));
-    await wait(() => text().includes("Fixed messages"), "the wording");
+    expect(text()).toContain("Fixed messages");
     expect(text()).toContain("Answers to common questions");
+    await wait(() => { const b = q("[data-action=\"sign-off\"]") as HTMLButtonElement | null; return !!b && !b.disabled; }, "the sign-off button, once the questions are checked", 6000);
+    expect(q("[data-action=\"sign-off\"]")!.textContent).toBe("Sign off this wording");     // nothing was changed
     click(q("[data-action=\"sign-off\"]"));
     await wait(() => !!document.getElementById("okConfirm"), "the confirmation");
     expect(document.getElementById("modal")!.textContent).toContain("has read every question and message");
     click(document.getElementById("okConfirm"));
     await wait(() => text().includes("Signed off by admin:dev-user"), "signed off", 6000);
     expect(q("[data-action=\"sign-off\"]")).toBeNull(); // nothing left to sign
-    expect(text()).toContain("-signed");
+    const list = ((await (await fetch("/api/missions")).json()).missions as { version: string; instrument_signed_off: boolean }[]);
+    expect(list.map(m => m.version).filter(v => v.startsWith("MSN-001-v1.3"))).toEqual(["MSN-001-v1.3"]);   // the same mission, approved: no second one
+    expect(list.find(m => m.version === "MSN-001-v1.3")!.instrument_signed_off).toBe(true);
+    expect(text()).not.toContain("-signed");
   });
 
   it("creates a mission from a plain brief: draft it, read it, save it as a draft", async () => {
@@ -548,13 +552,16 @@ describe("the live app", () => {
     set("sPeople", "People who finished our retail training last year.");
     set("sFind", "Whether they still work at the same place\nThe name of their employer");
     click(document.getElementById("draftS"));
-    await wait(() => document.getElementById("modal")!.textContent!.includes("Read the draft"), "the draft", 6000);
+    await wait(() => document.getElementById("modal")!.textContent!.includes("Review the questions"), "the draft", 6000);
     const m = document.getElementById("modal")!.textContent!;
     expect(m).toContain("What the employee will find out");
     expect(m).toContain("Results it can end with");                      // the findings and what the general results mean, so they are read before sign-off
     expect(m).toContain("Confirmed: Answers collected");
     expect(m).toContain("Whether they still work at the same place");
     expect(m).toContain("Nothing is saved yet");
+    expect(document.getElementById("jsonS")).toBeNull();                                      // no JSON editing in the create flow
+    expect(m).not.toContain("Edit as JSON");
+    await wait(() => !(document.getElementById("saveS") as HTMLButtonElement).disabled, "save, once the questions are checked", 6000);
     click(document.getElementById("saveS"));
     await wait(() => text().includes("Draft: not signed off") && text().includes("studio-check-v1.0"), "saved as a draft", 6000);
   });
@@ -571,6 +578,221 @@ describe("the live app", () => {
     expect((document.getElementById("confirmDelM") as HTMLButtonElement).disabled).toBe(false);
     click(document.getElementById("confirmDelM"));
     await wait(() => !text().includes("studio-check-v1.0"), "the mission is gone", 6000);
+  });
+
+  it("edit, remove and add questions before saving, then edit again at sign-off: one mission, approved in place", async () => {
+    click(q(".nav-item[data-view=\"missions\"]"));
+    await wait(() => !!q("[data-action=\"new-mission\"]"), "the create button");
+    click(q("[data-action=\"new-mission\"]"));
+    await wait(() => !!document.getElementById("draftS"), "the brief form");
+    const set = (id: string, v: string) => { const el = document.getElementById(id) as HTMLInputElement; el.value = v; el.dispatchEvent(new Event("input", { bubbles: true })); };
+    set("sName", "Editor check"); set("sProg", "Project Studio");
+    set("sGoal", "Find out whether people are still working where we placed them.");
+    set("sPeople", "People who finished our retail training last year.");
+    set("sFind", "Whether they still work at the same place\nThe name of their employer");
+    click(document.getElementById("draftS"));
+    const modal = document.getElementById("modal")!;
+    await wait(() => modal.textContent!.includes("Review the questions"), "the draft", 6000);
+    const cards = () => [...modal.querySelectorAll(".q-card:not(.q-add)")] as HTMLElement[];
+    const saveBtn = () => document.getElementById("saveS") as HTMLButtonElement;
+    await wait(() => !saveBtn().disabled, "the first check", 6000);
+
+    // each question shows both channels side by side, and has Edit and Remove
+    expect(cards()).toHaveLength(2);
+    for (const c of cards()) { expect(c.textContent).toContain("WhatsApp"); expect(c.textContent).toContain("Phone call"); expect(c.querySelector("[data-q-edit]")).not.toBeNull(); expect(c.querySelector("[data-q-remove]")).not.toBeNull(); }
+    expect(modal.textContent).toContain("No problems found");
+
+    // edit the first question, in both channels
+    const phoneOf = (c: HTMLElement) => (c.querySelectorAll(".q-channel")[1]!.querySelector("p")!.textContent || "").trim();
+    // the questions are grouped under categories, and the phone column is read only
+    expect([...modal.querySelectorAll(".q-group-title")].map(h => h.firstChild!.textContent)).toEqual(["Work"]);
+    expect(cards()[0]!.querySelector(".q-channel:nth-child(2) em")!.textContent).toBe("read only");
+    const phoneBefore = phoneOf(cards()[0]!);
+    click(cards()[0]!.querySelector("[data-q-edit]"));
+    expect(saveBtn().disabled).toBe(true);                                   // not while a question is open for editing
+    expect(document.getElementById("qeSpoken")).toBeNull();                  // there is no box for the phone wording
+    expect(modal.querySelector(".q-card.editing .q-fixed")!.textContent).toBe(phoneBefore);
+    set("qeText", "Are you still working at the same place?");
+    click(modal.querySelector("[data-q-save]"));
+    expect(cards()[0]!.textContent).toContain("Are you still working at the same place?");
+    await wait(() => !saveBtn().disabled, "a fresh check", 6000);
+    expect(phoneOf(cards()[0]!)).toBe(phoneBefore);                          // editing the written question did not change what the phone says
+
+    // a repeat is refused, with the question it repeats named, while typing and on save
+    click(cards()[1]!.querySelector("[data-q-edit]"));
+    set("qeText", "are you STILL working at the same place");
+    const warn = document.getElementById("qeWarn")!;
+    expect(warn.hidden).toBe(false);
+    expect(warn.textContent).toContain("same as question 1");
+    click(modal.querySelector("[data-q-save]"));
+    expect(modal.querySelector(".q-card.editing")).not.toBeNull();            // still open
+    click(modal.querySelector("[data-q-cancel]"));
+    expect(cards()[1]!.textContent).toContain("The name of their employer");   // unchanged
+
+    // add a question: asked at the end, in both channels
+    click(modal.querySelector("[data-q-add]"));
+    expect(document.getElementById("qaSpoken")).toBeNull();                  // no phone wording box here either
+    expect((document.getElementById("qaCategory") as HTMLSelectElement).value).toBe("work");   // it starts in the category of the question before
+    set("qaText", "What is your monthly income?");
+    click(modal.querySelector("[data-q-add-save]"));
+    await wait(() => cards().length === 3, "the new question");
+    expect(cards()[2]!.textContent).toContain("What is your monthly income?");
+    expect(cards()[2]!.textContent).toContain("Asked of everyone");
+    await wait(() => !saveBtn().disabled && cards()[2]!.textContent!.includes("monthly income"), "the check after adding", 6000);
+    // the same question again is refused
+    click(modal.querySelector("[data-q-add]"));
+    set("qaText", "What is your monthly income");
+    click(modal.querySelector("[data-q-add-save]"));
+    expect(document.getElementById("qaWarn")!.textContent).toContain("same as question 3");
+    click(modal.querySelector("[data-q-add-cancel]"));
+    // a choice needs at least two answers
+    click(modal.querySelector("[data-q-add]"));
+    set("qaText", "How do you travel to work?");
+    const type = document.getElementById("qaType") as HTMLSelectElement; type.value = "choice"; type.dispatchEvent(new Event("change", { bubbles: true }));
+    set("qaOpts", "Bus");
+    click(modal.querySelector("[data-q-add-save]"));
+    expect(document.getElementById("qaWarn")!.textContent).toContain("between 2 and 10");
+    set("qaOpts", "Bus\nTrain\nOn foot");
+    const cat = document.getElementById("qaCategory") as HTMLSelectElement; cat.value = "__new"; cat.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(document.getElementById("qaNewCategory")).not.toBeNull();         // a box for the new category's name
+    click(modal.querySelector("[data-q-add-save]"));
+    expect(document.getElementById("qaWarn")!.textContent).toContain("Give the category a name");
+    set("qaNewCategory", "Travel");
+    click(modal.querySelector("[data-q-add-save]"));
+    await wait(() => cards().length === 4, "the choice question");
+    expect([...modal.querySelectorAll(".q-group-title")].map(h => h.firstChild!.textContent)).toEqual(["Work", "Travel"]);   // the new category has its own heading
+    expect(cards()[3]!.textContent).toContain("1Bus");
+    expect(cards()[3]!.textContent).toContain("Choose one");
+
+    // remove it again (asks first), and the last remaining question can never be removed
+    click(cards()[3]!.querySelector("[data-q-remove]"));
+    expect(cards()[3]!.textContent).toContain("Remove this question?");
+    click(cards()[3]!.querySelector("[data-q-keep]"));
+    expect(cards()).toHaveLength(4);
+    click(cards()[3]!.querySelector("[data-q-remove]")); click(cards()[3]!.querySelector("[data-q-remove-yes]"));
+    await wait(() => cards().length === 3, "the removal");
+    click(cards()[2]!.querySelector("[data-q-remove]")); click(cards()[2]!.querySelector("[data-q-remove-yes]"));
+    await wait(() => cards().length === 2, "the second removal");
+
+    // save: the saved draft has exactly these two questions
+    await wait(() => !saveBtn().disabled, "the final check", 6000);
+    click(saveBtn());
+    await wait(() => text().includes("Draft: not signed off") && text().includes("editor-check-v1.0"), "saved as a draft", 6000);
+    const def = async (v: string) => (await (await fetch(`/api/missions/${v}/definition`)).json()).definition;
+    const draft = await def("editor-check-v1.0");
+    expect(draft.instrument.questions.map((x: { text: string }) => x.text)).toEqual(["Are you still working at the same place?", "The name of their employer?"]);
+    expect(draft.instrument.questions[0].spoken).toBeTruthy();                // the phone wording was pinned when the written wording changed
+    expect(draft.evidence_requirements).toHaveLength(2);                      // the extra "what to find out" entries went with their questions
+
+    // at sign-off the same editor is there: change a question and sign off with the change
+    await wait(() => !!q("#qEditorMount .q-card"), "the questions on the mission page", 6000);
+    const mcards = () => [...document.querySelectorAll("#qEditorMount .q-card")] as HTMLElement[];
+    await wait(() => { const b = q("[data-action=\"sign-off\"]") as HTMLButtonElement | null; return !!b && !b.disabled; }, "sign-off ready", 6000);
+    click(mcards()[1]!.querySelector("[data-q-edit]"));
+    expect((q("[data-action=\"sign-off\"]") as HTMLButtonElement).disabled).toBe(true);
+    set("qeText", "What is the name of the place where you work?");
+    click(q("#qEditorMount [data-q-save]"));
+    await wait(() => (q("[data-action=\"sign-off\"]") as HTMLButtonElement).textContent === "Sign off with my changes" && !(q("[data-action=\"sign-off\"]") as HTMLButtonElement).disabled, "sign off with changes", 6000);
+    click(q("[data-action=\"sign-off\"]"));
+    await wait(() => !!document.getElementById("okConfirm"), "the confirmation");
+    expect(document.getElementById("modal")!.textContent).toContain("Your changes to the questions are included");
+    click(document.getElementById("okConfirm"));
+    await wait(() => text().includes("Signed off by admin:dev-user"), "signed off", 6000);
+    const signed = await def("editor-check-v1.0");
+    expect(signed.instrument.draft).toBe(false);                                  // the same mission is now approved...
+    expect(signed.instrument.questions.map((x: { text: string }) => x.text)).toEqual(["Are you still working at the same place?", "What is the name of the place where you work?"]);   // ...with the questions as edited
+    const names = ((await (await fetch("/api/missions")).json()).missions as { version: string }[]).map(m => m.version).filter(v => v.startsWith("editor-check"));
+    expect(names).toEqual(["editor-check-v1.0"]);                                 // one mission: nothing extra, no "-signed" copy
+    expect(text()).not.toContain("editor-check-v1.0-signed");
+    // a signed mission is read only
+    expect(document.querySelectorAll("#qEditorMount [data-q-edit]").length).toBe(0);
+  }, 40000);
+
+  // Slow the named request down, count how often it is sent, and optionally make it fail.
+  const slowRequest = (part: string, ms: number, fail = false, method = "") => {
+    const real = globalThis.fetch; const seen = { calls: 0 };
+    globalThis.fetch = ((u: string, i?: RequestInit) => {
+      if (!String(u).includes(part) || (method && (i?.method ?? "GET") !== method)) return real(u, i);   // only the one kind of request, not the reload that follows it
+      seen.calls += 1;
+      return new Promise(r => setTimeout(() => r(fail ? new Response(JSON.stringify({ error: { message: "The server is busy, try again." } }), { status: 500, headers: { "content-type": "application/json" } }) : real(u, i)), ms));
+    }) as typeof fetch;
+    return { seen, restore: () => { globalThis.fetch = real; } };
+  };
+  const topBar = () => document.querySelector(".top-progress") as HTMLElement;
+
+  it("a slow action holds its button with a spinner, shows the top bar, cannot be sent twice, and lets go when it works", async () => {
+    click(q(".nav-item[data-view=\"cases\"]"));
+    await wait(() => !!q("[data-action=\"check-replies\"]"), "the check button");
+    const btn = () => q("[data-action=\"check-replies\"]") as HTMLButtonElement;
+    const first = btn(), label = first.textContent;
+    const slow = slowRequest("/admin/tick", 800);
+    try {
+      first.click(); first.click(); first.click();                         // three quick presses
+      expect(first.classList.contains("is-busy")).toBe(true);              // guarded at once
+      expect(first.disabled).toBe(true);
+      expect(first.getAttribute("aria-busy")).toBe("true");
+      expect(first.textContent).toBe("Checking…");
+      await wait(() => !topBar().hidden, "the top bar", 3000);             // slow work shows the bar
+      expect(slow.seen.calls).toBe(1);                                     // and only one request went out
+      await wait(() => !btn().classList.contains("is-busy") && topBar().hidden, "the work to finish", 6000);
+      expect(btn().disabled).toBe(false);
+      expect(btn().textContent).toBe(label);                               // the original words are back
+      expect(slow.seen.calls).toBe(1);
+    } finally { slow.restore(); }
+  });
+
+  it("when the work fails the button is released and the reason is shown", async () => {
+    await wait(() => !!q("[data-action=\"check-replies\"]"), "the check button");
+    const btn = () => q("[data-action=\"check-replies\"]") as HTMLButtonElement;
+    const slow = slowRequest("/admin/tick", 500, true);
+    try {
+      btn().click();
+      expect(btn().classList.contains("is-busy")).toBe(true);
+      await wait(() => (document.getElementById("toastRegion")?.textContent ?? "").includes("The server is busy"), "the error", 3000);
+      await wait(() => !btn().classList.contains("is-busy") && topBar().hidden, "the button to be released", 3000);
+      expect(btn().disabled).toBe(false);
+      expect(btn().textContent).toBe("Check for replies");
+    } finally { slow.restore(); }
+  });
+
+  it("a confirm dialog stays open with a working button until the work is done, takes one press only, then closes", async () => {
+    click(q(".nav-item[data-view=\"agent\"]"));
+    await wait(() => !!q("[data-agent-tab=\"controls\"]"), "the Controls tab");
+    click(q("[data-agent-tab=\"controls\"]"));
+    await wait(() => !!q("[data-action=\"pause-platform\"]"), "the kill switch");
+    click(q("[data-action=\"pause-platform\"]"));
+    await wait(() => !!document.getElementById("okConfirm"), "the confirmation");
+    const ok = document.getElementById("okConfirm") as HTMLButtonElement, dialog = document.getElementById("modal")!;
+    const slow = slowRequest("/controls", 700, false, "POST");
+    try {
+      ok.click(); ok.click();
+      expect(dialog.contains(ok)).toBe(true);                              // still open
+      expect(ok.classList.contains("is-busy")).toBe(true);
+      expect(ok.textContent).toBe("Switching off…");
+      expect((document.getElementById("cancelConfirm") as HTMLButtonElement).disabled).toBe(true);
+      await wait(() => dialog.innerHTML === "", "the dialog to close", 6000);   // closed when done
+      expect(slow.seen.calls).toBe(1);                                     // one press, one request
+    } finally { slow.restore(); }
+    await wait(() => !!q("[data-action=\"resume-platform\"]"), "the switched-off state");
+    click(q("[data-action=\"resume-platform\"]"));                           // put it back for the tests that follow
+    await wait(() => !!document.getElementById("okConfirm"), "the second confirmation");
+    click(document.getElementById("okConfirm"));
+    await wait(() => !!q("[data-action=\"pause-platform\"]"), "running again", 6000);
+  }, 30000);
+
+  it("the area that waits for data shows a spinner and its words", async () => {
+    const real = globalThis.fetch; let release: () => void = () => undefined;
+    const gate = new Promise<void>(r => { release = r; });
+    globalThis.fetch = ((u: string, i?: RequestInit) => (String(u).includes("/cases/") && String(u).split("/").length === 5 && !String(u).includes("conversation") ? gate.then(() => real(u, i)) : real(u, i))) as typeof fetch;
+    try {
+      click(q(".nav-item[data-view=\"cases\"]"));
+      await wait(() => !!q("tr[data-case]"), "a case row");
+      click(q("tr[data-case]"));
+      await wait(() => !!document.querySelector("#caseDrawer .loading-line .spinner"), "the spinner in the drawer");
+      expect(document.getElementById("caseDrawer")!.textContent).toContain("Loading…");
+    } finally { release(); globalThis.fetch = real; }
+    await wait(() => !document.querySelector("#caseDrawer .loading-line"), "the drawer to fill", 4000);
+    click(document.getElementById("closeDrawer"));
   });
 
   const openStudioForm = async () => {
@@ -591,7 +813,7 @@ describe("the live app", () => {
   it("the create form shows the steps, a visible privacy note, folded-away settings, a live count, and plain problems before anything is sent", async () => {
     await openStudioForm();
     const dialog = document.getElementById("modal")!;
-    expect([...dialog.querySelectorAll(".stepper-item")].map(e => e.textContent!.replace(/^\d/, ""))).toEqual(["Describe", "Draft", "Read", "Save"]);
+    expect([...dialog.querySelectorAll(".stepper-item")].map(e => e.textContent!.replace(/^\d/, ""))).toEqual(["Describe", "Draft", "Review", "Save"]);
     expect(dialog.querySelector(".stepper-item.active")!.textContent).toContain("Describe");
     expect(dialog.querySelector(".studio-note")!.textContent).toContain("Do not write any person's name or phone number");
     expect([...dialog.querySelectorAll(".form-section > h3")].map(h => h.textContent!.replace("(optional)", "").trim())).toEqual(["About the mission", "What it is for", "Tone and style"]);
@@ -620,7 +842,7 @@ describe("the live app", () => {
     click(document.getElementById("draftS"));
     const problems = dialog.querySelector(".studio-problems")!.textContent!;
     for (const w of ["Give the mission a name", "Say what the programme is called", "at least 20 characters", "who the people are", "what you need to find out"]) expect(problems).toContain(w);
-    expect(dialog.textContent).not.toContain("Read the draft");
+    expect(dialog.textContent).not.toContain("Review the questions");
     expect((document.getElementById("sAtt") as HTMLInputElement).value).toBe("4"); // what was typed is kept
 
     // contact hours that end before they start
@@ -644,7 +866,7 @@ describe("the live app", () => {
       expect(dialog.querySelector(".studio-progress")).not.toBeNull();
       expect(document.getElementById("draftS")!.textContent).toBe("Drafting…");
       expect((document.getElementById("draftS") as HTMLButtonElement).disabled).toBe(true);
-      await wait(() => dialog.textContent!.includes("Read the draft"), "the draft", 6000);
+      await wait(() => dialog.textContent!.includes("Review the questions"), "the draft", 6000);
     } finally { globalThis.fetch = realFetchHere; }
     expect(dialog.classList.contains("modal-sticky")).toBe(false);          // the draft screen is unchanged
     click(document.getElementById("backS"));

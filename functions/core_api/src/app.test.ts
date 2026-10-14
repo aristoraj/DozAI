@@ -713,29 +713,63 @@ describe("the page asking whether a call has finished", () => {
 });
 
 describe("signing off the questionnaire wording", () => {
-  it("saves a new approved version with who signed it and when, and makes it the one new participants join", async () => {
+  it("approves the SAME mission in place, with who signed it and when: no second mission", async () => {
     const { call } = start();
     const before = (await call("GET", "/missions")).json;
-    expect(before.missions[0]).toMatchObject({ instrument_signed_off: false, signed_off: null });
+    expect(before.missions).toHaveLength(1);
+    expect(before.missions[0]).toMatchObject({ version: "MSN-001-v1.3", instrument_signed_off: false, signed_off: null });
+    const wordingBefore = (await call("GET", "/missions/MSN-001-v1.3/definition")).json.definition.instrument;
     expect((await call("POST", "/missions/MSN-001-v1.3/sign-off", { confirm: true }, "reviewer")).status).toBe(403);
     expect((await call("POST", "/missions/MSN-001-v1.3/sign-off", {}, "admin")).status).toBe(400); // must say it was read
     const r = await call("POST", "/missions/MSN-001-v1.3/sign-off", { confirm: true }, "admin");
-    expect(r.status).toBe(201);
-    expect(r.json.mission).toMatchObject({ version: "MSN-001-v1.3-signed", instrument_signed_off: true, signed_off: { by: "admin:dev-user" } });
+    expect(r.status).toBe(200);
+    expect(r.json.mission).toMatchObject({ version: "MSN-001-v1.3", instrument_signed_off: true, signed_off: { by: "admin:dev-user" } });
     expect(Date.parse(r.json.mission.signed_off.at)).not.toBeNaN();
     const after = (await call("GET", "/missions")).json;
-    expect(after.default_version).toBe("MSN-001-v1.3-signed"); // new participants join the signed-off one
-    expect(after.missions[0]).toMatchObject({ version: "MSN-001-v1.3", instrument_signed_off: false }); // the old version is untouched
-    // the wording itself is unchanged: only the approval differs
-    const a = (await call("GET", "/missions/MSN-001-v1.3/definition")).json.definition.instrument, b = (await call("GET", "/missions/MSN-001-v1.3-signed/definition")).json.definition.instrument;
-    expect({ ...b, draft: true, signed_off: undefined }).toEqual({ ...a, signed_off: undefined });
+    expect(after.missions).toHaveLength(1);                       // still one mission
+    expect(after.missions[0]).toMatchObject({ version: "MSN-001-v1.3", instrument_signed_off: true });
+    expect(after.default_version).toBe("MSN-001-v1.3");
+    // the wording is unchanged: only the approval differs
+    const def = (await call("GET", "/missions/MSN-001-v1.3/definition")).json.definition.instrument;
+    expect(def.draft).toBe(false);
+    expect(def.questions).toEqual(wordingBefore.questions);
   });
 
-  it("cannot be done twice, and a second sign-off of the old version gets its own name", async () => {
+  it("people already on the mission follow the approved wording straight away", async () => {
+    const { call } = start();
+    const imp = await call("POST", "/participants/import", { consent_attested: true, rows: [{ name: "Early Person", phone: "9876500001", location: "T", cohort: "B", employer: "Acme", language: "en" }] }, "admin");
+    expect(imp.json.created).toHaveLength(1);
+    await call("POST", "/missions/MSN-001-v1.3/sign-off", { confirm: true }, "admin");
+    const cases = (await call("GET", "/cases")).json.cases;
+    expect(cases).toHaveLength(1);
+    expect(cases[0].mission_version ?? "MSN-001-v1.3").toBe("MSN-001-v1.3");
+    expect((await call("GET", "/missions")).json.missions[0]).toMatchObject({ participants: 1, instrument_signed_off: true });
+  });
+
+  it("can be done only once: a second sign-off is refused and nothing changes", async () => {
+    const { call } = start();
+    const first = await call("POST", "/missions/MSN-001-v1.3/sign-off", { confirm: true }, "admin");
+    const second = await call("POST", "/missions/MSN-001-v1.3/sign-off", { confirm: true }, "admin");
+    expect(second.status).toBe(409);
+    expect(second.json.error.code).toBe("ALREADY_SIGNED_OFF");
+    expect((await call("GET", "/missions")).json.missions).toHaveLength(1);
+    expect((await call("GET", "/missions")).json.missions[0].signed_off.at).toBe(first.json.mission.signed_off.at); // the first approval stands
+  });
+
+  it("two sign-offs at the same moment give one approved mission and no extra one", async () => {
+    const { call } = start();
+    const both = await Promise.all([call("POST", "/missions/MSN-001-v1.3/sign-off", { confirm: true }, "admin"), call("POST", "/missions/MSN-001-v1.3/sign-off", { confirm: true }, "admin")]);
+    expect(both.filter(x => x.status === 200).length).toBeGreaterThanOrEqual(1);
+    expect((await call("GET", "/missions")).json.missions).toHaveLength(1);
+  });
+
+  it("an approved mission is not changed by saving a mission with its name", async () => {
     const { call } = start();
     await call("POST", "/missions/MSN-001-v1.3/sign-off", { confirm: true }, "admin");
-    expect((await call("POST", "/missions/MSN-001-v1.3-signed/sign-off", { confirm: true }, "admin")).json.error.code).toBe("ALREADY_SIGNED_OFF");
-    expect((await call("POST", "/missions/MSN-001-v1.3/sign-off", { confirm: true }, "admin")).json.mission.version).toBe("MSN-001-v1.3-signed2");
+    const def = (await call("GET", "/missions/MSN-001-v1.3/definition")).json.definition;
+    expect((await call("POST", "/missions", def, "admin")).status).toBe(400);             // the name still belongs to the built-in mission
+    expect((await call("POST", "/missions", { ...def, version: "MSN-001-v1.3-copy" }, "admin")).status).toBe(201); // but a copy under a new name is a new mission, as before
+    expect((await call("GET", "/missions")).json.missions).toHaveLength(2);
   });
 
   it("records the person who saved an approved wording, whatever the form claimed", async () => {
@@ -749,6 +783,21 @@ describe("signing off the questionnaire wording", () => {
     // and a draft never carries a sign-off
     const draft = await call("POST", "/missions", { ...def, version: "MSN-001-v9.1", instrument: { ...def.instrument, draft: true, signed_off: { by: "x", at: "y" } } }, "admin");
     expect(draft.json.mission.signed_off).toBeNull();
+  });
+
+  it("a mission you created is approved in place too, and keeps its place in the list", async () => {
+    const { call } = start();
+    const brief = { name: "Place check", programme_name: "Project Udaan", goal: "Find out whether people we placed in jobs are still working there.", people: "Young people who finished a retail training with us.", find_out: "Whether they still work at the same place\nThe name of their employer" };
+    const draft = (await call("POST", "/missions/draft", brief, "admin")).json.definition;
+    await call("POST", "/missions", draft, "admin");
+    const other = { ...draft, version: "place-check-v2.0" };
+    await call("POST", "/missions", other, "admin");
+    const before = (await call("GET", "/missions")).json.missions.map((m: { version: string }) => m.version);
+    const r = await call("POST", `/missions/${draft.version}/sign-off`, { confirm: true }, "admin");
+    expect(r.status).toBe(200);
+    expect(r.json.mission).toMatchObject({ version: draft.version, instrument_signed_off: true });
+    expect((await call("GET", "/missions")).json.missions.map((m: { version: string }) => m.version)).toEqual(before);   // same missions, same order
+    expect((await call("POST", `/missions/${draft.version}/sign-off`, { confirm: true }, "admin")).status).toBe(409);
   });
 });
 
@@ -841,6 +890,96 @@ describe("deleting a mission", () => {
     await call("POST", `/missions/${version}/delete`, { confirm: version }, "admin");
     const again = (await call("POST", "/missions/draft", brief, "admin")).json.definition;
     expect(again.version).toBe(version);
+  });
+});
+
+describe("editing the questions before sign-off", () => {
+  const brief = { name: "Six-month placement check", programme_name: "Project Udaan", goal: "Find out whether people we placed in jobs are still working there six months on.", people: "Young people who finished a retail training with us.", find_out: "Whether they still work at the same place\nThe name of their employer\nWhether they want job support" };
+  type Q = { id: string; text: string; evidence_key: string; spoken?: string };
+  const savedDraft = async () => {
+    const t = start();
+    const def = (await t.call("POST", "/missions/draft", brief, "admin")).json.definition;
+    await t.call("POST", "/missions", def, "admin");
+    return { ...t, def };
+  };
+
+  it("the check says what is wrong in plain words and what the voice agent would say, and saves nothing", async () => {
+    const { call, def } = await savedDraft();
+    expect((await call("POST", "/missions/check", def, "reviewer")).status).toBe(200); // reading is allowed to everyone who can read: it changes nothing
+    const good = (await call("POST", "/missions/check", def, "admin")).json;
+    expect(good.problems).toEqual([]);
+    expect(good.phone.map((p: { id: string }) => p.id)).toEqual(def.instrument.questions.map((q: Q) => q.id));
+    const repeated = { ...def, instrument: { ...def.instrument, questions: def.instrument.questions.map((q: Q, n: number) => (n === 1 ? { ...q, text: def.instrument.questions[0].text } : q)) } };
+    expect((await call("POST", "/missions/check", repeated, "admin")).json.problems.join(" ")).toContain("Questions 1 and 2 are the same question");
+    expect((await call("GET", "/missions")).json.missions).toHaveLength(2); // the built-in one and the saved draft: checking saved nothing
+  });
+
+  it("signing off without edits keeps the questions exactly as they were", async () => {
+    const { call, def } = await savedDraft();
+    const r = await call("POST", `/missions/${def.version}/sign-off`, { confirm: true }, "admin");
+    expect(r.status).toBe(200);
+    expect(r.json.mission.version).toBe(def.version);
+    const after = (await call("GET", `/missions/${def.version}/definition`)).json.definition;
+    expect(after.instrument.questions).toEqual(def.instrument.questions);
+    expect(after.instrument.draft).toBe(false);
+  });
+
+  it("signing off with edits approves the same mission with the edited questions: no extra mission", async () => {
+    const { call, def } = await savedDraft();
+    const phone0 = (await call("POST", "/missions/check", def, "admin")).json.phone[0].spoken;          // what the phone says now
+    const edited = def.instrument.questions.map((q: Q, n: number) => (n === 0 ? { ...q, text: "Are you still working at the same place?", spoken: phone0 } : q)).filter((q: Q) => q.evidence_key !== def.instrument.questions[2].evidence_key);
+    const needs = def.evidence_requirements.filter((r: { key: string }) => r.key !== def.instrument.questions[2].evidence_key);
+    const before = (await call("GET", "/missions")).json.missions.length;
+    const r = await call("POST", `/missions/${def.version}/sign-off`, { confirm: true, edits: { instrument: { ...def.instrument, questions: edited }, evidence_requirements: needs } }, "admin");
+    expect(r.status).toBe(200);
+    expect(r.json.mission).toMatchObject({ version: def.version, instrument_signed_off: true, signed_off: { by: "admin:dev-user" } });
+    expect((await call("GET", "/missions")).json.missions).toHaveLength(before);            // nothing was added
+    const saved = (await call("GET", `/missions/${def.version}/definition`)).json.definition;
+    expect(saved.instrument.questions).toHaveLength(2);
+    expect(saved.instrument.questions[0]).toMatchObject({ text: "Are you still working at the same place?", spoken: phone0 });
+    expect(saved.evidence_requirements).toHaveLength(2);
+    expect(saved.instrument.draft).toBe(false);
+  });
+
+  it("the phone wording is fixed: an edit that would change what is said on a call is refused, and nothing is saved", async () => {
+    const { call, def } = await savedDraft();
+    const sign = (questions: unknown[]) => call("POST", `/missions/${def.version}/sign-off`, { confirm: true, edits: { instrument: { ...def.instrument, questions } } }, "admin");
+    // reworded written question, phone wording not pinned: the call would now say something different
+    let r = await sign(def.instrument.questions.map((q: Q, n: number) => (n === 0 ? { ...q, text: "Is this still your workplace?" } : q)));
+    expect(r.status).toBe(400);
+    expect(r.json.error.message).toContain("phone wording of question 1 is fixed");
+    // phone wording written by hand over the existing one
+    r = await sign(def.instrument.questions.map((q: Q, n: number) => (n === 1 ? { ...q, spoken: "Say it my way." } : q)));
+    expect(r.status).toBe(400);
+    // a new question with phone wording typed in
+    r = await sign([...def.instrument.questions, { id: "q_new_one", module: "work", type: "text", evidence_key: "new_one", text: "What is your monthly income?", spoken: "Hand written." }]);
+    expect(r.status).toBe(400);
+    expect((await call("GET", `/missions/${def.version}/definition`)).json.definition.instrument.draft).toBe(true);
+    // the same edits are fine when the phone wording is pinned or the question is new and has none
+    const phone0 = (await call("POST", "/missions/check", def, "admin")).json.phone[0].spoken;
+    r = await sign(def.instrument.questions.map((q: Q, n: number) => (n === 0 ? { ...q, text: "Is this still your workplace?", spoken: phone0 } : q)));
+    expect(r.status).toBe(200);
+  });
+
+  it("edits that are not valid are refused and nothing is saved", async () => {
+    const { call, def } = await savedDraft();
+    const repeated = def.instrument.questions.map((q: Q, n: number) => (n === 1 ? { ...q, text: def.instrument.questions[0].text } : q));
+    const r = await call("POST", `/missions/${def.version}/sign-off`, { confirm: true, edits: { instrument: { ...def.instrument, questions: repeated } } }, "admin");
+    expect(r.status).toBe(400);
+    expect(r.json.error.code).toBe("INVALID_MISSION");
+    expect(r.json.error.message).toContain("same question");
+    expect((await call("GET", "/missions")).json.missions).toHaveLength(2); // still just the built-in one and the draft
+    expect((await call("GET", `/missions/${def.version}/definition`)).json.definition.instrument.draft).toBe(true); // and the draft is still a draft
+  });
+
+  it("edits cannot change who signed, the name or the contact rules", async () => {
+    const { call, def } = await savedDraft();
+    const r = await call("POST", `/missions/${def.version}/sign-off`, { confirm: true, edits: { name: "Hijacked", version: "x-v9", policy: { maxAttempts: 9 }, instrument: { ...def.instrument, signed_off: { by: "someone-important", at: "2020-01-01T00:00:00.000Z" } } } }, "admin");
+    expect(r.status).toBe(200);
+    expect(r.json.mission.version).toBe(def.version);
+    expect(r.json.mission.name).toBe(def.name);
+    expect(r.json.mission.signed_off.by).toBe("admin:dev-user");
+    expect(r.json.mission.signed_off.at).not.toBe("2020-01-01T00:00:00.000Z");
   });
 });
 

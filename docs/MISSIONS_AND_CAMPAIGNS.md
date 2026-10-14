@@ -17,7 +17,7 @@ A **mission** is data, not code. It holds:
 
 Rules that keep it safe:
 
-- **Saved missions never change.** A change is a new version. Saving an existing version is refused.
+- **Saved missions never change, with one exception: sign-off.** A change is a new version, and saving over an existing version is refused. The one thing that does change a saved mission is its sign-off, which approves the same mission in place (see Mission Studio below). After that it never changes again.
 - **A case is pinned to one mission version when it is created.** Editing or adding missions never alters a conversation in progress. Cases made before missions existed use the built-in mission (`MSN-001-v1.3`).
 - A mission is **checked before it is saved**: unknown jump targets, repeated ids, choice questions with fewer than two options, rules that wait for an answer that does not exist, loops that would never finish, an intro template that is not in the list. Problems come back in plain words.
 - Participants join a mission when they are imported (a chooser appears once there is more than one; the default is the most recently added).
@@ -72,9 +72,25 @@ A mission no longer has to be written as JSON. On the Mission page, **Create a m
 
 **Checked like any mission.** The draft goes through exactly the rules a saved mission must pass (every need has a question that can fill it, no loops, no dangling jumps, conditions that can happen). If it fails, the drafter is given its own mistakes and tries again, up to three times. Nothing is saved while drafting.
 
-**Always a draft.** A drafted mission is saved as DRAFT wording. The drafter cannot approve its own work: only a person signs the wording off on the Mission page (see the Questionnaire wording card), which saves a new signed-off version with their name and the time on it. Until then every real reply is handed to a person.
+**Always a draft.** A drafted mission is saved as DRAFT wording. The drafter cannot approve its own work: only a person signs the wording off on the Mission page (see the Questionnaire wording card). Signing off approves **this same mission**: the version name does not change and no second mission is made. It records who signed and when, and the mission is then approved and never changes again. Until then every real reply is handed to a person.
 
-**Still JSON underneath, on purpose.** The structure lets the employee know what is still missing for each person, lets reports compare cases, and keeps questions in approved wording. "Add from JSON" remains for developers, and "Edit as JSON" on the review screen opens the draft for fine changes.
+**Still JSON underneath, on purpose.** The structure lets the employee know what is still missing for each person, lets reports compare cases, and keeps questions in approved wording. "Add from JSON" on the Mission page remains for developers. The review screen no longer has "Edit as JSON": the questions are managed on screen (below).
+
+### Reviewing and editing the questions (14 October 2026)
+
+The questions are shown as one card each, with **WhatsApp** and **Phone call** wording side by side, when the draft is made and again on the Mission page before sign-off. An unsigned mission opens its questions by itself.
+
+- **Edit** a question: the WhatsApp wording, the wording of its answer choices, its category, and whether it must be answered. What each answer choice saves is locked, so saved data keeps its meaning.
+- **The phone wording is read only.** The Phone call column shows exactly what the voice agent says, marked "read only". There is no box to change it, and editing the written question does not change it: the first time the written wording (or an answer choice) is edited, the wording the phone has at that moment is written into the question's own phone wording (its existing `spoken` field), so the call sounds the same. A question that is added gets the automatic phone wording and nothing else. The server refuses a sign-off whose edits would change what a call says.
+- **Remove** a question (it asks first). Its "what to find out" entry goes with it, and the questions that led to it now lead past it. A question that other things depend on is not removed: it says what depends on it.
+- **Add** a question: free text, choose one, or yes/no. It goes in the category of the question before it, or one you pick, or a new one you name. It is asked at the end, of everyone, and gets its own key and its own "what to find out" entry. Its phone wording is made automatically.
+- **Categories.** Questions are shown grouped under their category (the existing `module` of each question), with a count. A question keeps its number, which is what the checks refer to. Claude is asked to give every question a category by purpose (work, support, income...) with 2 to 6 categories and one spelling each; a draft that puts four or more questions in one category is sent back. Names are tidied ("Same Job" and "same_job" are one category), a question is never left without one, and the plain draft made without a model sorts each line by the words in it (support is checked before job).
+- **No repeats.** A question that says the same thing as another one that could be asked of the same person is refused, while typing and again on save. The same wording on two branches ("where do you work" for people who stayed and for people who moved) is allowed.
+- **A live check** runs after every change and lists problems in plain words, including a call and WhatsApp asking different things. Saving and signing off stay disabled while there are problems or a question is open for editing.
+
+**Sign-off updates the mission in place.** Edits made before the first save go into the one draft that is saved. At sign-off the same mission is approved with the questions as they stand: the sign-off request takes an optional `edits` with the questions and the "what to find out" list. Nothing else can be changed that way, and who signed and when is set by the platform. There is no `-signed` copy and the mission list has no extra entry. People already on the mission follow the approved wording straight away. If phone calls are used, the phone form shows "Out of date" and is published again. An approved mission is read only: a change after that is a new version, as before. A second sign-off is refused.
+
+The check is `POST /api/missions/check`. It saves nothing and calls no model.
 
 Drafting uses the model, so the kill switch and the daily spend limit apply to it.
 
