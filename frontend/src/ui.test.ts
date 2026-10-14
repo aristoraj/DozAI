@@ -9,7 +9,7 @@ import type { Server } from "node:http";
 import { CaseService, ConversationRunner, DEMO_TENANT, GatewayTools, InMemoryStore, RuleClassifier } from "@dozai/core";
 import { DEFAULT_POLICY } from "@dozai/domain";
 import { dispatchVoice, FakeVoice, ScriptedAgentRuntime } from "@dozai/adapters";
-import { createApp } from "../../../functions/core_api/src/app";
+import { createApp } from "../../backend/functions/core_api/src/app";
 
 let server: Server;
 let base = "";
@@ -41,7 +41,7 @@ beforeAll(async () => {
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   globalThis.fetch = ((url: string, init?: RequestInit) => realFetch(url.startsWith("/") ? base + url : url, init)) as typeof fetch;
 
-  const html = readFileSync(resolve(process.cwd(), "apps/web/index.html"), "utf8"); // run from the repo root (npm test)
+  const html = readFileSync(resolve(process.cwd(), "frontend/index.html"), "utf8"); // run from the repo root (npm test)
   document.body.innerHTML = html.match(/<body>([\s\S]*)<\/body>/)![1]!.replace(/<script[\s\S]*?<\/script>/g, "");
   (window as unknown as { DOZAI_API_BASE: string }).DOZAI_API_BASE = "/api";
   window.scrollTo = () => undefined;

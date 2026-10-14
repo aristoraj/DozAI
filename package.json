@@ -3,16 +3,16 @@
   "private": true,
   "version": "0.0.1",
   "workspaces": [
-    "apps/*",
-    "packages/*",
-    "functions/*",
-    "appsail/*"
+    "frontend",
+    "backend/packages/*",
+    "backend/functions/*",
+    "backend/appsail/*"
   ],
   "scripts": {
-    "dev": "concurrently -n api,web -c cyan,magenta \"npm run dev:api\" \"npm run dev -w apps/web\"",
+    "dev": "concurrently -n api,web -c cyan,magenta \"npm run dev:api\" \"npm run dev -w frontend\"",
     "dev:api": "tsx watch scripts/dev-server.ts",
-    "build": "npm run build -w apps/web",
-    "build:cloud": "npm run build -w functions/core_api && npm run build -w appsail/mcp-gateway",
+    "build": "npm run build -w frontend",
+    "build:cloud": "npm run build -w backend/functions/core_api && npm run build -w backend/appsail/mcp-gateway",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },

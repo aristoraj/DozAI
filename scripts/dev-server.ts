@@ -13,8 +13,8 @@
 //                              INTERAKT_WEBHOOK_SECRET and ANTHROPIC_API_KEY. Replies only arrive if Interakt's webhook points at this
 //                              computer (see README, "Real WhatsApp from your computer").
 import { readFileSync, existsSync } from "node:fs";
-import { createApp } from "../functions/core_api/src/app";
-import { mountMcp } from "../appsail/mcp-gateway/src/server";
+import { createApp } from "../backend/functions/core_api/src/app";
+import { mountMcp } from "../backend/appsail/mcp-gateway/src/server";
 import { DEFAULT_POLICY } from "@dozai/domain";
 import { CaseService, ConversationRunner, DEMO_TENANT, GatewayTools, InMemoryStore, RuleClassifier, seedDemo } from "@dozai/core";
 import { ClaudeAgentRuntime, ClaudeMissionDrafter, ClaudeReplyClassifier, FakeVoice, InteraktChannels, ScriptedAgentRuntime } from "@dozai/adapters";

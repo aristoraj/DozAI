@@ -4,5 +4,5 @@
     "strict": true, "noEmit": true, "skipLibCheck": true, "esModuleInterop": true,
     "types": ["node"]
   },
-  "include": ["packages/*/src", "functions/*/src", "appsail/*/src", "scripts"]
+  "include": ["backend/packages/*/src", "backend/functions/*/src", "backend/appsail/*/src", "scripts"]
 }

@@ -1,0 +1,9 @@
+{
+  "name": "core_api",
+  "private": true,
+  "version": "0.0.1",
+  "main": "index.js",
+  "scripts": {
+    "build": "node ../../../scripts/bundle.mjs backend/functions/core_api/src/index.ts backend/functions/core_api/index.js"
+  }
+}

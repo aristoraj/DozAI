@@ -4,7 +4,7 @@ dist/
 .env.*
 .catalyst/
 *.log
-functions/core_api/index.js
-appsail/mcp-gateway/dist/
+backend/functions/core_api/index.js
+backend/appsail/mcp-gateway/dist/
 client/
 .env.local

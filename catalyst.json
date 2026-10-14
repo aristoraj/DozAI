@@ -8,7 +8,7 @@
       "src",
       "node_modules"
     ],
-    "source": "functions"
+    "source": "backend/functions"
   },
   "appsail": [
     {

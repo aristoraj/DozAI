@@ -29,7 +29,7 @@ export const missionOf = (c, missions) => c.mission_version ?? missions[0]?.vers
 
 export const casesFor = (cases, missions, key) => (key === ALL ? cases : cases.filter(c => missionOf(c, missions) === key));
 
-/** The same counting rules as GET /api/summary (functions/core_api/src/app.ts). A test keeps the two in step. */
+/** The same counting rules as GET /api/summary (backend/functions/core_api/src/routes/reports.ts). A test keeps the two in step. */
 export function summarize(cases, slots = OUTCOMES) {
   const count = f => cases.filter(f).length;
   const done = c => c.workflow_status === "complete";
