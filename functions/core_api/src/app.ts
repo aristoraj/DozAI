@@ -607,10 +607,28 @@ export function createApp(deps: AppDeps) {
     const st = await svc.store.getConversation(t, id);
     const instrument = (await svc.getMission(t, (await svc.getCase(t, id)).mission_version)).instrument;
     const questions = instrument.questions;
+    // An answer and the question it leads to are saved in the same instant, so times cannot order them. Each message carries its
+    // number (conv:<case>:<n>) and each answer the number of the message it replied to, so they are put in sending order.
+    const seqOf = (key: string) => { const n = Number(key.slice(key.lastIndexOf(":") + 1)); return key.startsWith("conv:") && Number.isInteger(n) ? n : undefined; };
     const sent = (await svc.store.listOutbox(t)).filter(o => o.case_id === id && o.kind === "whatsapp_text")
-      .map(o => ({ at: o.created_at, from: "system" as const, text: String(o.payload.text ?? ""), delivered: o.status }));
-    const answered = (st?.answers ?? []).map(a => ({ at: a.at, from: "participant" as const, text: a.label ?? a.value, question: a.question_id }));
-    const messages = [...sent, ...answered].sort((a, b) => a.at.localeCompare(b.at));
+      .map(o => ({ at: o.created_at, from: "system" as const, text: String(o.payload.text ?? ""), delivered: o.status, seq: seqOf(o.idempotency_key) }));
+    const answered = (st?.answers ?? []).map(a => ({ at: a.at, from: "participant" as const, text: a.label ?? a.value, question: a.question_id, after: a.after }));
+    type Line = { at: string; from: "system" | "participant"; text: string; delivered?: string; question?: string; seq?: number; after?: number };
+    const lines: Line[] = [...sent, ...answered];
+    let ordered: Line[];
+    if (sent.every(m => m.seq !== undefined) && answered.every(a => a.after !== undefined)) {
+      ordered = [];
+      const queue = [...answered];
+      for (const m of [...sent].sort((a, b) => a.seq! - b.seq!)) {
+        while (queue.length && queue[0]!.after! < m.seq!) ordered.push(queue.shift()!);
+        ordered.push(m);
+      }
+      ordered.push(...queue);
+    } else {
+      // Conversations saved before answers carried their position: order by time, an answer first when the times are equal.
+      ordered = lines.sort((a, b) => a.at.localeCompare(b.at) || (a.from === b.from ? 0 : a.from === "participant" ? -1 : 1));
+    }
+    const messages = ordered.map(({ seq: _seq, after: _after, ...m }) => m);
     res.json({
       status: st?.status ?? "not_started", current: st?.current ? { id: st.current, text: questionById(instrument, st.current)?.text ?? "" } : null,
       escalation_reason: st?.escalation_reason ?? null, reasks: st?.reasks ?? 0, answered: st?.answers.length ?? 0, questions_total: questions.length, messages,

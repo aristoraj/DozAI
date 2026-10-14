@@ -449,7 +449,7 @@ export const ConversationStateSchema = z.object({
   status: z.enum(["awaiting_consent", "asking", "done", "escalated", "stopped"]),
   current: z.string().nullable(),
   reasks: z.number().int().nonnegative(),
-  answers: z.array(z.object({ question_id: z.string(), value: z.string(), label: z.string().optional(), at: z.string() })),
+  answers: z.array(z.object({ question_id: z.string(), value: z.string(), label: z.string().optional(), at: z.string(), /** How many messages had been sent when this answer came in: it replies to message number `after`. */ after: z.number().int().nonnegative().optional() })),
   messages_sent: z.number().int().nonnegative(),
   last_inbound_at: z.string().nullable(),
   escalation_reason: z.string().optional(),
