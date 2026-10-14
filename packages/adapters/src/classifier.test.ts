@@ -62,13 +62,10 @@ describe("when the model is asked", () => {
     }
   });
 
-  it("for a short reply to a text question too: the model checks it is the kind of thing asked for", async () => {
-    const ok = reader({ intent: "answer", answers: [ans("employer_name", "Acme Retail", 0.9, { value: "Acme Retail" })], confidence: 0.9 });
-    expect(await ok.classify(input("Acme Retail", employer))).toMatchObject({ intent: "answer", value: "Acme Retail" });
-    expect(ok.calls).toHaveLength(1);
-    const role = questionById(DRAFT_INSTRUMENT, "q_same_role")!;
-    const odd = reader({ intent: "unclear", confidence: 0.8 });
-    expect(await odd.classify(input("Namee", role))).toMatchObject({ intent: "unclear" }); // not a job title: asked again
+  it("not for a short name typed to a text question", async () => {
+    const r = reader({ intent: "unclear", confidence: 0.3 });
+    expect(await r.classify(input("Acme Retail", employer))).toMatchObject({ intent: "answer", value: "Acme Retail" });
+    expect(r.calls).toHaveLength(0);
   });
 });
 
@@ -107,7 +104,6 @@ describe("what the model is told", () => {
     expect(system).toContain("never write messages");
     expect(system).toContain("copied character for character");
     expect(system).toContain("I am planning to change jobs");
-    expect(system).toContain("Namee");
   });
 
   it("the reply is quoted as data, the request has a fixed schema, and the model has no tools", async () => {
@@ -333,5 +329,37 @@ describe("through the conversation runner", () => {
     await t.say("2 months ago I left my job");
     expect(await t.evidence()).toEqual({ work_status: "not_employed" });
     expect((await t.outbox()).at(-1)).toMatch(/main reason you are not working/);
+  });
+});
+
+describe("an open 'anything else?' question", () => {
+  const open = { ...DRAFT_INSTRUMENT, questions: [...DRAFT_INSTRUMENT.questions, { id: "q_else", module: "support", type: "text" as const, evidence_key: "anything_else", text: "Is there anything else you would like to tell us?" }] };
+  const q = open.questions.at(-1)!;
+  const ask = (text: string) => input(text, q, { instrument: open });
+
+  it("does not ask the model about a clear 'no' or 'nothing', because the rules already know it is the answer", async () => {
+    for (const text of ["No", "Nothing", "no thanks", "nothing else"]) {
+      const r = reader({ intent: "unclear", confidence: 1 });
+      expect(await r.classify(ask(text)), text).toMatchObject({ intent: "answer", value: "Nothing to add" });
+      expect(r.calls, text).toHaveLength(0);
+    }
+  });
+
+  it("tells the model the question is optional, so 'no' is an answer there and not elsewhere", async () => {
+    const r = reader({ intent: "unclear", confidence: 0.5 });
+    await r.classify(ask("hmm let me think about it a little"));
+    expect(r.calls).toHaveLength(1);
+    expect(JSON.stringify(r.calls[0]!.messages)).toContain("This question is optional");
+    expect(String(r.calls[0]!.system)).toContain("The exception is a question marked \"optional\"");
+    const other = reader({ intent: "unclear", confidence: 0.5 });
+    await other.classify(input("hmm let me think about it a little", employer));
+    expect(JSON.stringify(other.calls[0]!.messages)).not.toContain("This question is optional"); // a name question is not optional
+  });
+
+  it("tells the model that 'not smooth at all' is the longer option and that everyday praise picks the option that fits", async () => {
+    const r = reader({ intent: "unclear", confidence: 0.5 });
+    await r.classify(input("hmm", status));
+    expect(String(r.calls[0]!.system)).toContain("\"not smooth at all\" means the longer one");
+    expect(String(r.calls[0]!.system)).toContain("very good");
   });
 });

@@ -297,7 +297,7 @@ describe("phone calls over the API", () => {
     const done = await call("POST", `/cases/${id}/simulate-call`, { outcome: "answered", answers: { work_status: "I work at the same place as before", employer_name: "Acme", role_title: "Packer" } });
     expect(done.status).toBe(200);
     expect(done.json.applied).toBe(1);
-    expect((await svc.getCase(DEMO_TENANT, id)).status).toBe("evaluating");
+    expect((await svc.getCase(DEMO_TENANT, id)).status).toBe("complete"); // the agent was woken, judged the answers (employer matches the record) and the policy completed it
     const detail = (await call("GET", `/cases/${id}`)).json;
     expect(detail.requirements).toMatchObject({ gaps: [], collected: 3 });
     expect(detail.evidence.map((e: { source: string }) => e.source)).toEqual(["voice", "voice", "voice"]);
@@ -856,5 +856,48 @@ describe("deleting a mission", () => {
     await call("POST", `/missions/${version}/delete`, { confirm: version }, "admin");
     const again = (await call("POST", "/missions/draft", brief, "admin")).json.definition;
     expect(again.version).toBe(version);
+  });
+});
+
+describe("a whole WhatsApp interview on a local setup (simulated replies, scripted agent)", () => {
+  async function started() {
+    const t = start();
+    const id = (await t.call("POST", "/participants/import", { rows: [row], consent_attested: true })).json.created[0].case_id as string;
+    await t.call("POST", `/cases/${id}/run-agent`, { scenario: "no_response" }); // sends the first message and waits
+    const reply = async (text: string) => (await t.call("POST", `/cases/${id}/simulate-reply`, { text })).json;
+    return { ...t, id, reply };
+  }
+
+  it("asks the questions, and when the last is answered the agent judges the answers and the case is completed", async () => {
+    const { reply, call, id } = await started();
+    expect((await reply("yes")).result.action).toBe("started");
+    expect((await reply("1")).result.action).toBe("answered");            // I work at the same place
+    expect((await reply("Acme")).result.action).toBe("answered");         // the employer on the programme record
+    expect((await reply("Packer")).result.action).toBe("answered");
+    const last = await reply("1");                                         // yes to job support
+    expect(last.result).toMatchObject({ action: "finished", finished: true });
+    expect(last.session).toMatchObject({ status: "idle", simulated: true });  // the agent was woken
+    expect(last.case).toMatchObject({ status: "confirmed", outcome: "Same job" });
+    const d = (await call("GET", `/cases/${id}`)).json;
+    expect(d.decisions.at(-1)).toMatchObject({ proposed_outcome: "confirmed", livelihood_state: "same_job" });
+  });
+
+  it("sends a different employer to a person, because it does not match the programme record", async () => {
+    const { reply } = await started();
+    await reply("yes"); await reply("1"); await reply("Some Other Company"); await reply("Packer");
+    const last = await reply("2");
+    expect(last.case.status).toBe("review");
+  });
+
+  it("someone not working is not confirmed, and someone who stops is left alone", async () => {
+    const a = await started();
+    await a.reply("yes"); await a.reply("3"); await a.reply("1"); await a.reply("1"); // not working, the reason, looking for work
+    const done = await a.reply("2");                                                // and no to job support
+    expect(done.case).toMatchObject({ status: "not-confirmed" });
+    const b = await started();
+    await b.reply("yes");
+    const stopped = await b.reply("stop");
+    expect(stopped.result.action).toBe("stopped");
+    expect(stopped.case.status).toBe("opted-out");
   });
 });

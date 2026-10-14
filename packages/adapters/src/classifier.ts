@@ -7,7 +7,7 @@
 // here against what was actually asked (and again by the conversation runner before anything is saved).
 import Anthropic from "@anthropic-ai/sdk";
 import { INTENTS, type Classification } from "@dozai/contracts";
-import { isPlainSelection, normaliseReply, optionsOf, redactForModel, validateAnswer, type ClassifyInput, type Instrument, type Question, type ReplyClassifier } from "@dozai/core";
+import { isOptionalText, isPlainSelection, NOTHING_TO_ADD, normaliseReply, optionsOf, redactForModel, validateAnswer, type ClassifyInput, type Instrument, type Question, type ReplyClassifier } from "@dozai/core";
 
 export const CLASSIFIER_MODEL = "claude-haiku-4-5"; // a small, cheap model is enough for a closed-set decision; override with DOZAI_CLASSIFIER_MODEL
 
@@ -42,9 +42,8 @@ Rules for answers:
   "Would you like our team to contact you about job support?" + "that would really help me" = Yes.
   It is not clear when the reply could fit either option ("it is complicated", "sort of", "maybe"): then choose unclear.
 - Text field: give value, copied from the reply: just the name, title or detail itself, without the words around it. Never invent, translate or tidy it up.
-- A text answer must be the kind of thing the question asks for: a job title or a kind of work for "What is your job title or the work you do?", the name of a business, shop or organisation for "the place where you work", a course or subject for "What are you studying?". A person's own name, a greeting, a word with no clear meaning, or something on another topic is NOT an answer to it: choose unclear.
-  "What is your job title or the work you do?" + "Software engineer intern" = answer. + "Namee" = unclear (not a job or kind of work).
-- "no", "none", "nothing", "I don't know", "not sure", "pata nahi" and the like are NOT answers to a text field. If that is all the reply says, the intent is unclear.
+- "no", "none", "nothing", "I don't know", "not sure", "pata nahi" and the like are NOT answers to a text field that wants a name or a detail. If that is all the reply says, the intent is unclear. The exception is a question marked "optional" (for example "Is there anything else you would like to tell us?"): there, "no" or "nothing" is the answer, so report it with the value "${NOTHING_TO_ADD}".
+- Choice field: when one option's words sit inside another's ("Smooth" and "Not smooth"), "not smooth at all" means the longer one. Understand praise, complaints and everyday wording ("very good", "it was terrible") as the option that fits, and leave the answer out only when two options fit equally.
 - One reply can answer several fields. "I work at Acme as a cashier" answers an employer field and a job title field if both are listed. Report each one. Do not report a field that is listed under "Already known".
 - A field may say when it is asked. Still report it if the reply clearly gives it; the system decides whether it applies.
 - If the reply answers other fields but not the current question, report those answers and leave the current question out.
@@ -109,7 +108,7 @@ function buildContext(i: ClassifyInput): string {
   if (i.known?.length) lines.push(`Already known (do not report these again):\n${i.known.map(k => `- ${k.key}: ${safe(k.value, 80)}`).join("\n")}`);
   if (i.recent?.length) lines.push(`Last questions and what we understood:\n${i.recent.map(r => `- Asked: ${r.question}\n  Understood: ${safe(r.answer, 80)}`).join("\n")}`);
   const others = fieldsOf(i.instrument).filter(f => f.evidence_key !== q.evidence_key && !known.has(f.evidence_key));
-  lines.push(`Current question:\n${describeField(i.instrument, q, true)}`);
+  lines.push(`Current question:\n${describeField(i.instrument, q, true)}${isOptionalText(q) ? "\n(This question is optional: \"no\" or \"nothing\" is a valid answer.)" : ""}`);
   if (others.length) lines.push(`Other fields this reply might also answer:\n${others.map(f => describeField(i.instrument, f, false)).join("\n")}`);
   return lines.join("\n\n");
 }
@@ -138,8 +137,9 @@ export class ClaudeReplyClassifier implements ReplyClassifier {
     if (first.intent === "unclear" || first.intent === "off_topic") return true;
     if (first.intent === "faq" && first.confidence < 0.7) return true; // a question the approved explainers do not match: maybe about the question itself
     if (first.intent !== "answer" || i.context !== "question" || !i.question) return false;
+    if (isOptionalText(i.question) && first.value === NOTHING_TO_ADD) return false; // a clear "nothing else": nothing more to read
     const t = normaliseReply(i.text);
-    if (i.question.type === "text") return true; // even a short reply is checked: is it the kind of thing the question asks for?
+    if (i.question.type === "text") return t.split(" ").length > 3; // a short name is the answer; a sentence may hold more
     return !isPlainSelection(t, i.question); // a bare number or option name is a pick; anything longer may hold more
   }
 

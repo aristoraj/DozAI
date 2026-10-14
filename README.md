@@ -15,6 +15,18 @@ npm run build:cloud   # bundles functions/core_api and appsail/mcp-gateway for C
 
 Everything runs on **synthetic data** (12 sample cases). Do not load real participant data in development.
 
+**What works locally, with nothing reaching a real person:** the whole app on an in-memory store (restarting the API resets it). WhatsApp is simulated: open a case and type a participant reply, or pick a scenario. Phone calls go to a simulator: publish the phone form on the Mission page, press **Request a phone call** on a case, approve it on the Approvals page, then use the case page's simulator buttons to finish the call as a person who answered, did not answer, refused, or was the wrong person. Create a mission, sign off its wording, use the Controls tab and the kill switch, and delete an unused mission, all against the local store.
+
+**The agent:** by default a script, so no key and no cost. To try the real agent and Mission Studio drafting, start the API with `USE_CLAUDE=1 npm run dev:api` (use `npm run dev:api` and `npm run dev -w apps/web` in two terminals on Windows PowerShell if you need the variable set separately: `$env:USE_CLAUDE=1`). It reads `ANTHROPIC_API_KEY` from `.env.local` and costs a few cents a run. It still never messages or calls anyone.
+
+**Real WhatsApp from your computer** (`DOZAI_LOCAL_WHATSAPP=1` in `.env.local`, never deployed). The local server then sends real messages through Interakt and uses the real agent. Because real people could be messaged, it does **not** load the made-up cohort: import the numbers you want to test with, ideally your own and your team's. The store is in memory, so restarting forgets every case.
+- **Sending works at once.** Import a participant, press **Run agent session**, and the first template goes to that number.
+- **Replies need a way in.** Interakt delivers replies to a public web address, so your computer must be reachable: start a tunnel to port 3001 (ngrok or Cloudflare Tunnel), and in Interakt's webhook settings use `https://<your-tunnel>/api/webhooks/interakt` with the same secret as `INTERAKT_WEBHOOK_SECRET`. Then press **Check for replies** on the page to process them.
+- **There is only one webhook.** Interakt sends to a single address, the same one the deployed app uses. While it points at your computer, the deployed app receives no WhatsApp replies. Point it back to the deployed address when you finish.
+- To go back to simulation, remove the line (or set it to 0) and restart the API.
+
+**Before every push:** `npm run typecheck && npm test`. What cannot be tested locally is the real WhatsApp provider, the real ZoLabs calls, the Catalyst database and the cron schedule: check those on DozAI-Dev after a deploy.
+
 ## Layout
 
 | Path | What it is |

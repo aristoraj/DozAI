@@ -102,6 +102,19 @@ describe("outbound dispatch", () => {
     expect(verifyChain(events).ok).toBe(true);
   });
 
+  it("sends a queued message once, even when several scheduler passes run at the same moment", async () => {
+    // Every webhook, including each "delivered" and "read" notice, starts a pass: before this, each pass saw the message as pending and sent it again.
+    const { svc, store } = await queued();
+    let sends = 0;
+    const slow = new InteraktChannels(cfg({ fetch: (async () => { sends++; await new Promise(r => setTimeout(r, 25)); return new Response(JSON.stringify({ result: true, id: "prov-1" }), { status: 201 }); }) as never }));
+    const counts = await Promise.all([slow.dispatchOutbox(svc, DEMO_TENANT), slow.dispatchOutbox(svc, DEMO_TENANT), slow.dispatchOutbox(svc, DEMO_TENANT), slow.dispatchOutbox(svc, DEMO_TENANT)]);
+    expect(sends).toBe(1);
+    expect(counts.reduce((a, b) => a + b, 0)).toBe(1);
+    expect((await store.listOutbox(DEMO_TENANT))[0]!.status).toBe("sent");
+    expect((await store.listEvents(DEMO_TENANT, "C-1")).filter(e => e.type === "message_sent")).toHaveLength(1);
+    expect(await slow.dispatchOutbox(svc, DEMO_TENANT)).toBe(0); // and a later pass finds nothing left
+  });
+
   it("retries a transient failure, then gives up after three attempts", async () => {
     const { svc, store } = await queued();
     const ch = new InteraktChannels(cfg({ fetch: (async () => new Response(JSON.stringify({ result: false, message: "busy" }), { status: 503 })) as never }));
