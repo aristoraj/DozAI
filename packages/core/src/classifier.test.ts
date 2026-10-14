@@ -127,3 +127,29 @@ describe("validateAnswer: the check every answer passes before it is saved", () 
     expect(validateAnswer(employer, {})).toBeNull();
   });
 });
+
+describe("yes/no answered in a sentence", () => {
+  // Written the way a drafted mission writes it: a choice whose only options are Yes and No.
+  const changed = { id: "q_changed", module: "status", type: "choice", evidence_key: "changed_job", text: "Have you changed jobs since your training?",
+    options: [{ key: "1", label: "Yes", value: "yes" }, { key: "2", label: "No", value: "no" }] } as const;
+
+  it.each([
+    ["I am planning to change jobs", "no"], ["Not yet, thinking about it", "no"], ["I have not changed", "no"], ["No, I have not", "no"],
+    ["I will change next month", "no"], ["abhi nahi, soch raha hoon", "no"],
+    ["Yes, I already changed", "yes"], ["I have, last year", "yes"], ["haan badal liya", "yes"],
+  ])("'Have you changed jobs?' + '%s' -> %s", async (text, value) => {
+    expect(await read(text, changed as never)).toMatchObject({ intent: "answer", value });
+  });
+
+  it.each([["I don't need any support", "no"], ["Sure, please do", "yes"], ["of course", "yes"]])("'Would you like support?' + '%s' -> %s", async (text, value) => {
+    expect(await read(text, support)).toMatchObject({ intent: "answer", value });
+  });
+
+  it("a reply that could go either way is not guessed", async () => {
+    for (const text of ["I am not sure", "maybe, I don't know", "it is complicated", "pata nahi"]) expect((await read(text, changed as never)).intent, text).not.toBe("answer");
+  });
+
+  it("only for yes/no: a sentence with 'not' does not pick an option of a longer list", async () => {
+    expect((await read("I have not decided", status)).intent).not.toBe("answer");
+  });
+});

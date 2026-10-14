@@ -36,6 +36,11 @@ Rules for answers:
 - Report an answer only when the reply clearly says it. Do not guess, do not report a likely answer, do not fill a field the reply does not mention. When in doubt leave it out.
 - Each answer has: key (the field key), support (the exact words from the reply that show it, copied character for character), and confidence (0 to 1: how sure you are the reply says this).
 - Choice field: give option_key (the option number). Choose it only when the reply clearly means that option, in any language or wording. A number inside a sentence is not a choice: "2 months ago I left" is NOT option 2.
+- Yes/No questions: participants often answer in a sentence instead of "yes" or "no". If what they say settles the question, that is a clear answer: choose the option it means. Put the sentence that settles it in support.
+  "Have you changed jobs since your training?" + "I am planning to change jobs" = No (they have not changed yet; planning is not doing).
+  "Have you changed jobs since your training?" + "I joined a new company last month" = Yes.
+  "Would you like our team to contact you about job support?" + "that would really help me" = Yes.
+  It is not clear when the reply could fit either option ("it is complicated", "sort of", "maybe"): then choose unclear.
 - Text field: give value, copied from the reply: just the name, title or detail itself, without the words around it. Never invent, translate or tidy it up.
 - "no", "none", "nothing", "I don't know", "not sure", "pata nahi" and the like are NOT answers to a text field that wants a name or a detail. If that is all the reply says, the intent is unclear. The exception is a question marked "optional" (for example "Is there anything else you would like to tell us?"): there, "no" or "nothing" is the answer, so report it with the value "${NOTHING_TO_ADD}".
 - Choice field: when one option's words sit inside another's ("Smooth" and "Not smooth"), "not smooth at all" means the longer one. Understand praise, complaints and everyday wording ("very good", "it was terrible") as the option that fits, and leave the answer out only when two options fit equally.
@@ -108,8 +113,11 @@ function buildContext(i: ClassifyInput): string {
   return lines.join("\n\n");
 }
 
-/** A choice the rules matched to exactly one option stays, even when the model reads the extra words as nothing. */
-const keepRuleAnswer = (first: Classification, q: Question | null): boolean => first.intent === "answer" && !!q && q.type !== "text";
+/**
+ * A choice the rules matched to exactly one option stays, even when the model reads the extra words as nothing.
+ * A yes/no the rules only inferred from a sentence (lower confidence) does not: the model's reading of it wins.
+ */
+const keepRuleAnswer = (first: Classification, q: Question | null): boolean => first.intent === "answer" && !!q && q.type !== "text" && first.confidence >= 0.9;
 
 interface RawAnswer { key?: unknown; option_key?: unknown; value?: unknown; support?: unknown; confidence?: unknown }
 const asStr = (v: unknown) => (typeof v === "string" ? v : undefined);

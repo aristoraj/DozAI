@@ -422,6 +422,21 @@ describe("conversation over the API", () => {
     expect((await call("GET", `/cases/${id}/conversation`)).json.answered).toBe(1);
   });
 
+  it("each answer is shown before the question it led to, even when both are saved in the same instant", async () => {
+    const { call, svc } = start();
+    const r = await call("POST", "/participants/import", { rows: [row], consent_attested: true });
+    const id = r.json.created[0].case_id as string;
+    await svc.beginSession("tenant_demo", id, "test");
+    const frozen = new Date();
+    Object.assign(svc, { now: () => frozen }); // every message and answer gets the same time
+    for (const text of ["yes", "1", "Acme Retail", "Cashier"]) await call("POST", `/cases/${id}/simulate-reply`, { text });
+    const said = (await call("GET", `/cases/${id}/conversation`)).json.messages.map((m: { from: string; text: string }) => `${m.from}: ${m.text.split("\n").at(-1)}`);
+    const at = (s: string) => said.findIndex((x: string) => x.includes(s));
+    expect(at("participant: I work at the same place")).toBeLessThan(at("name of the place where you work"));
+    expect(at("participant: Acme Retail")).toBeLessThan(at("job title"));
+    expect(at("participant: Cashier")).toBeGreaterThan(at("job title"));
+  });
+
   it("the case page says which things are known, which are missing and which do not match", async () => {
     const { call, svc } = start();
     const r = await call("POST", "/participants/import", { rows: [row], consent_attested: true });

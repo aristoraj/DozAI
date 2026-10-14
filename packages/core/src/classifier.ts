@@ -93,6 +93,8 @@ export class RuleClassifier implements ReplyClassifier {
       if (hit) return out({ intent: "answer", option_key: hit.key, value: hit.value, confidence: 0.95 });
       if (GREETING.test(t)) return out({ intent: "off_topic", confidence: 0.8 });
       if (isDontKnow(t)) return out({ intent: "unclear", confidence: 0.6 });
+      const meant = QUESTIONISH.test(t) ? undefined : inferYesNo(t, q);
+      if (meant) return out({ intent: "answer", option_key: meant.key, value: meant.value, confidence: 0.7 });
       return this.faqOrUnclear(t, i);
     }
 
@@ -140,6 +142,32 @@ export function matchOption(t: string, q: Question) {
   return chosen;
 }
 const phrasesOf = (o: { label: string; value: string; synonyms?: string[] }) => [o.label, o.value.replace(/_/g, " "), ...(o.synonyms ?? [])].map(norm).filter(Boolean);
+
+// Replies to a yes/no question that do not say "yes" or "no" but settle it all the same.
+const SAYS_NO = word("not|never|haven t|havent|hasn t|hasnt|didn t|didnt|don t|dont|doesn t|doesnt|wasn t|wasnt|won t|wont|nahi|nahin|nhi|नहीं|नही");
+const SAYS_YES = word("already|i have|i ve|i did|i do|i would|of course|definitely|certainly|please do|zaroor|zarur|bilkul|ho gaya|kar liya|badal liya|ज़रूर|जरूर|बिल्कुल|हो गया|कर लिया|बदल लिया");
+// For "Have you ...?" or "Did you ...?", a reply about the future means it has not happened yet: "I am planning to change jobs" is No.
+const PAST_QUESTION = /^(have|has|did|were|was|kya aap ?ne|क्या आपने)(?![\p{L}\p{M}\p{N}])/u;
+const NOT_YET = word("planning|plan to|thinking (of|about)|going to|will|want to|wish to|hope to|soon|later|next (week|month|year)|in (the )?future|soch raha|soch rahi|sochna|karunga|karungi|सोच रहा|सोच रही|करूंगा|करूंगी");
+
+/** The yes and no options of a question: a yes/no question, or a choice whose only two options are Yes and No. */
+function yesNoOptions(q: Question) {
+  const options = optionsOf(q);
+  if (options.length !== 2) return undefined;
+  const find = (w: string) => options.find(o => [o.value, o.label].map(norm).includes(w));
+  const yes = find("yes"), no = find("no");
+  return yes && no ? { yes, no } : undefined;
+}
+
+/** "I am planning to change jobs", "I haven't", "already did": the yes or no a reply means, or undefined when it is not clear. */
+export function inferYesNo(t: string, q: Question) {
+  const yn = yesNoOptions(q);
+  if (!yn || isDontKnow(t)) return undefined;
+  if (PAST_QUESTION.test(norm(q.text)) && NOT_YET.test(t) && !/(^|\s)already(\s|$)/.test(t)) return yn.no;
+  if (SAYS_NO.test(t)) return yn.no;
+  if (SAYS_YES.test(t)) return yn.yes;
+  return undefined;
+}
 
 /** True when the reply is nothing but a clear pick (a number, a label or a listed synonym), so no further reading is needed. */
 export function isPlainSelection(t: string, q: Question): boolean {

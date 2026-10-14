@@ -106,7 +106,7 @@ export class ConversationRunner {
   private async saveAnswer(c: CaseRecord, st: ConversationState, q: Question, v: { value: string; label?: string }, confidence: number): Promise<void> {
     const ev = await this.svc.emit(c, "answer_recorded", "conversation-runner", `Answer recorded for ${q.id}`, { question: q.id, evidence_key: q.evidence_key });
     await this.svc.store.addEvidence({ evidence_id: newId("ev"), case_id: c.case_id, question_id: q.evidence_key, value: v.value, source: "whatsapp", confidence, event_id: ev.event_id, at: this.svc.now().toISOString() });
-    st.answers.push({ question_id: q.id, value: v.value, label: v.label, at: this.svc.now().toISOString() });
+    st.answers.push({ question_id: q.id, value: v.value, label: v.label, at: this.svc.now().toISOString(), after: st.messages_sent });
   }
 
   /**
