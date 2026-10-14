@@ -10,7 +10,7 @@
   ],
   "scripts": {
     "dev": "concurrently -n api,web -c cyan,magenta \"npm run dev:api\" \"npm run dev -w apps/web\"",
-    "dev:api": "tsx watch scripts/dev-server.ts",
+    "dev:api": "tsx watch --env-file-if-exists=.env.local scripts/dev-server.ts",
     "build": "npm run build -w apps/web",
     "build:cloud": "npm run build -w functions/core_api && npm run build -w appsail/mcp-gateway",
     "test": "vitest run",

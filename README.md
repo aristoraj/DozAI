@@ -7,7 +7,7 @@ Design: [ARCHITECTURE.md](ARCHITECTURE.md). Product baseline: the Core Team Walk
 
 ```bash
 npm install
-npm run dev        # API + MCP on :3001, web on :5173 (open http://localhost:5173)
+npm run dev        # API + MCP on :3001, web on :5173 (open http://localhost:5173). Reads .env.local if it exists
 npm test           # 26 tests: state machine, policy, tool gateway, ledger, agent flow
 npm run typecheck
 npm run build:cloud   # bundles functions/core_api and appsail/mcp-gateway for Catalyst
