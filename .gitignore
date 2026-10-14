@@ -8,3 +8,4 @@ backend/functions/core_api/index.js
 backend/appsail/mcp-gateway/dist/
 client/
 .env.local
+.vite/
