@@ -36,7 +36,7 @@ Each call is given a short context: the person's first name, the language, and w
 
 ## Same questions as WhatsApp
 
-A mission describes its questions twice: the questionnaire (`instrument`: order and branching, used by WhatsApp) and the list of evidence it needs (`evidence_requirements`: order and "ask only if" conditions, used to build the phone form). `packages/core/src/flow.ts` walks every path through the questionnaire and checks that a call would ask the same keys in the same order. The built-in mission passes on all four branches.
+A mission describes its questions twice: the questionnaire (`instrument`: order and branching, used by WhatsApp) and the list of evidence it needs (`evidence_requirements`: order and "ask only if" conditions, used to build the phone form). `backend/packages/core/src/missions/flow.ts` walks every path through the questionnaire and checks that a call would ask the same keys in the same order. The built-in mission passes on all four branches.
 
 What is checked: the same keys in the same order on every path; a need that waits for one a call reaches later; one key asked in two places with different kinds of answer; and a branching mission with no list of needs (a call would ask every question).
 
@@ -93,7 +93,7 @@ The callback address is `DOZAI_PUBLIC_URL/api/webhooks/zolabs/<ZOLABS_WEBHOOK_SE
 
 ## Assumptions to check against the first real call
 
-`parseZolabsCommunication` (in `packages/adapters/src/voice.ts`) is the one place that knows the provider's format. It was written before a real payload was seen and accepts several likely names for each part: the id, the status words, the answers (an object keyed by field id, or a list), the audio link, the transcript, the duration. Likewise, creating a form is assumed to return an id, and starting or scheduling a call is assumed to return a call id. Check each against the first test call and tighten them. The fixtures in `voice.test.ts` record what is expected today.
+`parseZolabsCommunication` (in `backend/packages/adapters/src/voice.ts`) is the one place that knows the provider's format. It was written before a real payload was seen and accepts several likely names for each part: the id, the status words, the answers (an object keyed by field id, or a list), the audio link, the transcript, the duration. Likewise, creating a form is assumed to return an id, and starting or scheduling a call is assumed to return a call id. Check each against the first test call and tighten them. The fixtures in `voice.test.ts` record what is expected today.
 
 ## Not built yet
 

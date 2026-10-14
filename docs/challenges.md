@@ -139,3 +139,13 @@ Each problem: what we saw, why it happened, how we fixed it.
 
 - Nothing known on the pages that exist today. The audit that found the items above (every page and dialog, at desktop and phone width) can be run again after any UI change.
 
+
+## Moving the folders without breaking anything
+
+- **Symptom:** None. This is how we made sure there would not be one.
+- **Risk:** Paths are written in many places: the package list and scripts, the lock file, `tsconfig`, `catalyst.json`, `app-config.json`, the deploy script, the build commands of each function, tests that read files by path, and the `.gitignore`. A missed one breaks only the part that uses it (for example a deploy), which tests do not always reach.
+- **What we did:** One step at a time, each on its own commit. After each step: typecheck, all tests, the web build, the cloud build, and loading the built API file the way the deploy script does. For the web app, the content-hashed file names of the production build were compared (same hash means same bytes). 29 screens were recorded at two widths (the style numbers and text of every element) before and after, and a script pressed every control on every page and listened for errors. For the API the list of routes was compared before and after.
+- **A catch on the way:** The route order matters when two patterns overlap, so the routes were registered in the original order and compared as a list. Also, a tool I wrote to tidy imports dropped a name used as `...name(`; the typecheck found it straight away. That is why the typecheck runs after every step.
+- **Lock file:** Moving the workspaces changes the paths in `package-lock.json`. `npm install` on Windows also reordered it and dropped the `libc` fields. We kept only the path changes and proved the result with a clean `npm ci`.
+- **The screen compare showed one difference:** on the Audit screen, event ids and the clock time. These change every time the API starts (random ids and the real time), not because of the move. Every style value was identical.
+- **Still to check by hand:** a real `catalyst deploy` to the development project. It reads `catalyst.json` (`functions.source` is now `backend/functions`) and `app-config.json` (`build_path` is now `./backend/appsail/mcp-gateway/dist`). That needs the Catalyst account, so it could not be run here. If the CLI cannot find the functions, those two lines are the first place to look.

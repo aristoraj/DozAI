@@ -8,9 +8,9 @@ Design: [ARCHITECTURE.md](ARCHITECTURE.md). Product baseline: the Core Team Walk
 ```bash
 npm install
 npm run dev        # API + MCP on :3001, web on :5173 (open http://localhost:5173)
-npm test           # 26 tests: state machine, policy, tool gateway, ledger, agent flow
+npm test           # every test: state machine, policy, tool gateway, ledger, agent flow, the web app
 npm run typecheck
-npm run build:cloud   # bundles functions/core_api and appsail/mcp-gateway for Catalyst
+npm run build:cloud   # bundles backend/functions/core_api and backend/appsail/mcp-gateway for Catalyst
 ```
 
 Everything runs on **synthetic data** (12 sample cases). Do not load real participant data in development.
@@ -25,35 +25,25 @@ Everything runs on **synthetic data** (12 sample cases). Do not load real partic
 
 ## Layout
 
+The project has two halves, **frontend** (what people see) and **backend** (what runs on the server), plus the files that tie them together.
+
 | Path | What it is |
 |---|---|
-| `packages/contracts` | zod schemas: enums, ledger events, MCP tool inputs, API shapes |
-| `packages/domain` | pure case state machine and contact policy |
-| `packages/core` | store port (+ in-memory), hash-chained ledger, `CaseService`, `GatewayTools`, session tokens, seed |
-| `packages/adapters` | fake WhatsApp channel and scripted agent (stands in for Claude in Sprint 1A) |
-| `functions/core_api` | Catalyst Advanced I/O function (Express): cases, review, audit, sessions |
-| `appsail/mcp-gateway` | Catalyst AppSail: MCP server over Streamable HTTP, Bearer session tokens |
-| `apps/web` | operator UI (ported prototype, now API-backed) |
-| `scripts/dev-server.ts` | local API + gateway on one in-memory store |
+| `frontend/` | The operator web app (plain JavaScript + Vite). Map of its folders: [frontend/README.md](frontend/README.md) |
+| `backend/functions/core_api` | Catalyst Advanced I/O function (Express): the API. One file per area under `src/routes/` |
+| `backend/functions/cron_tick` | Catalyst Cron function that calls the scheduler route |
+| `backend/appsail/mcp-gateway` | Catalyst AppSail: MCP server over Streamable HTTP, Bearer session tokens |
+| `backend/packages/contracts` | zod schemas: enums, ledger events, MCP tool inputs, API shapes |
+| `backend/packages/domain` | pure case state machine and contact policy |
+| `backend/packages/core` | the business rules, grouped by subject (missions, conversation, agent, storage, cases) |
+| `backend/packages/adapters` | the outside world: Interakt WhatsApp, ZoLabs calls, Claude, and the fake versions used in tests |
+| `backend/packages/catalyst` | Catalyst-specific pieces: the data store, sign-in |
+| `scripts/` | local dev server, deploy and bundle scripts |
+| `docs/` | decisions, challenges, runbooks and the project plan |
 
-### Web app files (`apps/web`)
+More detail on the backend folders: [backend/README.md](backend/README.md).
 
-| File | What it does |
-|---|---|
-| `index.html` | The page shell: sidebar, top bar, and empty containers the app fills in |
-| `src/main.js` | All screens and actions. Draws HTML from API data and handles clicks |
-| `src/select.js` | Custom dropdowns. Styles every `<select>` automatically, keeping the real one hidden inside (why: [docs/decisions.md](docs/decisions.md)) |
-| `src/number.js` | Custom number fields. Hides the browser's arrows and adds "−" and "+" buttons around the real input |
-| `src/file.js` | Custom file picker. A styled button and the file name, with the real input hidden inside |
-| `src/dashboard.js` | The Command centre's mission filter: which cases a mission keeps, the counting rules (the same as the server's summary), and the small motion that eases the numbers, bars and donut into place |
-| `src/busy.js` | The loading behaviour for the whole app: holds the button that was just pressed (spinner, no double press), the bar along the top for slow work, and the spinner markup for areas waiting for data |
-| `src/questions.js` | The question editor: one card per question showing WhatsApp and phone wording, with Edit, Remove and Add. The changes it makes to a mission are plain functions, tested on their own |
-| `src/styles.css` | All styling: colours and the type scale at the top, one look for every form field, then each screen |
-| `src/ui.test.ts` | Clicks through the real page against the real API (in memory, fake data) |
-| `src/busy.test.ts` | The loading rules: what is held, when the spinner and bar appear, and that everything is put back |
-| `src/questions.test.ts` | Edit, remove and add rules, each result run through the server's own check |
-| `src/select.test.ts`, `number.test.ts`, `file.test.ts` | Tests for the custom controls with fake data |
-| `src/dashboard.test.ts` | Tests for the counting rules and the motion, with fake data |
+Where things go: a new screen goes in `frontend/src/pages/`, a reusable piece of UI in `frontend/src/components/`, a new API route in `backend/functions/core_api/src/routes/`, and a new business rule in the matching folder of `backend/packages/core/src/`. The folder names `core_api`, `cron_tick` and `mcp-gateway` are part of the public web addresses, so do not rename them.
 
 ## Status
 

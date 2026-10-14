@@ -96,7 +96,7 @@ flowchart LR
 | WhatsApp | **EdZola WhatsApp gateway** behind `WhatsAppPort` | Template sends, inbound replies, opt-out. |
 | Voice | **ZoLabs** (our product) behind `VoicePort` | Call request, status, structured result, transcript link. |
 | Mail | Catalyst Mail or Zoho Mail API behind `NotifyPort` | Reviewer and admin notifications only. **Never send to participants or clients automatically.** Per org policy, humans send client mail. |
-| Validation | **zod** schemas in `packages/contracts` | Single source for API, MCP tool I/O and webhook payloads. |
+| Validation | **zod** schemas in `backend/packages/contracts` | Single source for API, MCP tool I/O and webhook payloads. |
 | Tests | Vitest (unit), Playwright (UI smoke), contract tests per tool and per adapter | See section 10. |
 | CI | GitHub Actions: lint, typecheck, test, build, `catalyst deploy` to staging | Same checks for AI-assisted and human code. Human review before every merge. |
 
@@ -126,7 +126,7 @@ All transitions go through one function, `transitionCase(caseId, expectedVersion
 2. checks policy (consent, contact window, attempt cap, opt-out lock),
 3. writes the event to the ledger, then updates the projection and increments `version`.
 
-The transition table is a pure, exhaustively tested module in `packages/domain`. Nothing else writes `cases.status`.
+The transition table is a pure, exhaustively tested module in `backend/packages/domain`. Nothing else writes `cases.status`.
 
 ### 5.3 Data Store tables (Sprint 1A minimum)
 
@@ -160,26 +160,28 @@ Every table carries `tenant_id`. Every query goes through a repository layer tha
 
 ```
 dozai/
-  apps/
-    web/                    # React + Vite -> Catalyst Slate
-  functions/
-    core-api/               # auth, cases, reviews, missions, audit routes
-    webhooks/               # whatsapp + zolabs inbound (signature-verified)
-    workers/                # outbox dispatcher, scheduler, session resumer
-  appsail/
-    mcp-gateway/            # MCP server + tool registry
-  packages/
-    contracts/              # zod schemas: API, MCP tools, webhook payloads, events
-    domain/                 # case state machine, policy engine, outcome rules (pure TS)
-    ledger/                 # append, hash chain, verify, repositories
-    adapters/               # runtime (Claude), whatsapp, zolabs, notify (+ fake/ versions)
-  missions/
-    placement-retention/    # bundle: instrument.json, policy.json, rubric.md, templates, skill/
-  scripts/                  # seed synthetic data, local dev harness
-  docs/                     # ADRs, runbooks
+  frontend/                 # operator web app (plain JS + Vite); built into client/ for Catalyst
+    src/lib/                #   data and helpers: api, state, format, dom
+    src/components/         #   reusable UI: modal, toast, case panel, controls, question editor
+    src/pages/              #   one folder or file per screen
+    src/styles/             #   CSS, imported in a fixed order from index.css
+  backend/
+    functions/
+      core_api/             # Express API: src/routes/ has one file per area
+      cron_tick/            # scheduler: calls POST /api/jobs/tick
+    appsail/
+      mcp-gateway/          # MCP server + tool registry
+    packages/
+      contracts/            # zod schemas: API, MCP tools, webhook payloads, events
+      domain/               # case state machine, contact policy (pure TS)
+      core/src/             # business rules: missions/, conversation/, agent/, storage/, cases/
+      adapters/             # Claude, Interakt WhatsApp, ZoLabs, plus fakes
+      catalyst/             # Catalyst data store and sign-in
+  scripts/                  # local dev server, bundle and deploy
+  docs/                     # decisions, runbooks, project plan
 ```
 
-**Dependency rule:** `domain` imports nothing but `contracts`. Functions and the gateway import `domain`, `ledger` and `adapters`. The web app imports only `contracts` types. This keeps the case engine free of mission specifics.
+**Dependency rule:** `domain` imports nothing but `contracts`. `core` imports `contracts` and `domain`; `adapters` import `core`. Functions and the gateway import `domain`, `core` and `adapters`. The web app imports no backend code at all: it only calls the API. This keeps the case engine free of mission specifics.
 
 ## 7. MCP gateway: tool contracts
 
@@ -334,7 +336,7 @@ You lead. Two developers build. Split by seam, not by layer, so each owns an are
 **Sprint 1B:** WhatsApp and ZoLabs adapters (real), the 34-question bundle and rubric, the review workspace, cohort dashboard, duplicate-contact safety, budgets, evaluation and audit export.
 
 **Working agreements for the team**
-- Contracts first: change `packages/contracts` in its own small PR so both devs unblock each other.
+- Contracts first: change `backend/packages/contracts` in its own small PR so both devs unblock each other.
 - One ticket = one acceptance test. The ticket list is derived from section 13.
 - ADRs in `docs/adr/` for any deviation from this document.
 - Weekly architecture review (30 minutes). Bring spike results and blockers.

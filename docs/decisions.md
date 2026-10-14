@@ -2,7 +2,7 @@
 
 Each entry: what we decided, why, and the option we did not take.
 
-## Custom dropdowns replace every native `<select>` (apps/web/src/select.js)
+## Custom dropdowns replace every native `<select>` (frontend/src/components/controls/select.js)
 
 - **Decision:** One small module turns each `<select>` into a styled button plus a popup list. The real `<select>` stays hidden inside it.
 - **Why:** The browser's own dropdown cannot be styled and looks different on every system. Keeping the real `<select>` means existing code that reads `.value` or listens for `change` did not need to change, and the existing UI tests still pass.
@@ -11,14 +11,14 @@ Each entry: what we decided, why, and the option we did not take.
 - **Popup placement:** The list is attached to `<body>` and positioned from the button, so the modal and drawer (which scroll) cannot clip it. It opens upward when there is more room above.
 - **Escape key:** The dropdown handles Escape itself and stops it there, otherwise it would also close the dialog behind it.
 
-## Custom number fields keep the real `<input type="number">` (apps/web/src/number.js)
+## Custom number fields keep the real `<input type="number">` (frontend/src/components/controls/number.js)
 
 - **Decision:** The browser's up/down arrows are hidden with CSS. Two small "−" and "+" buttons are added inside the field. They call the input's own `stepUp()` / `stepDown()`, then fire `input` and `change`.
 - **Why:** The input still handles typing, arrow keys, and its `min`, `max` and `step` rules, so no new logic was written. The app reads these fields through the `input` event and `.value`, so both still work.
 - **Rejected:** Replacing the input with a plain text box and checking the number ourselves. It would lose the browser's built-in limits and the mobile number keyboard.
 - **Limits:** A button is greyed out when the value reaches `min` or `max`.
 
-## One type scale for the whole UI (apps/web/src/styles.css, top of the file)
+## One type scale for the whole UI (frontend/src/styles/base.css, top of the file)
 
 - **Decision:** Every font size, weight and letter spacing comes from a short list defined once at the top of `styles.css`. No rule uses a raw `px` size (the only exceptions are the logo wordmark and the phone's three-dot menu).
 - **Why:** Before this there were 18 different sizes (6px to 31px) and 7 weights, and 66 inline styles in `main.js` used larger sizes than the stylesheet, so similar text looked different on different screens. 91 rules used 6 to 9px, which is hard to read.
@@ -41,7 +41,7 @@ Each entry: what we decided, why, and the option we did not take.
 - **Base rule for `<small>`:** Without one the browser picks 10px or 10.8px. `small { font-size: var(--fs-xs) }` fixes all of them.
 - **How to check it stays true:** Open each screen and read the real font size of every piece of text in the browser. A one-off script did this across 17 screens and dialogs, at 1440px and 390px wide. Only 11, 12, 13, 15, 20, 28 px, the page title and the logo showed up.
 
-## One look for every field, a custom checkbox and a custom file picker (styles.css, apps/web/src/file.js)
+## One look for every field, a custom checkbox and a custom file picker (frontend/src/styles/components/controls.css, frontend/src/components/controls/file.js)
 
 - **Decision:** Text boxes, text areas and number fields share one look (border, radius, padding, hover, teal focus glow, disabled, placeholder), defined once under "Form controls" in `styles.css`. It is written with `:where()`, which gives it the lowest priority, so a specific rule (the search box, the number field) can still change one thing without fighting it.
 - **Checkbox:** drawn in CSS (`appearance: none`, a tick that scales in). It is still the real checkbox, so keyboard, labels and form behaviour are unchanged.
@@ -51,7 +51,7 @@ Each entry: what we decided, why, and the option we did not take.
 - **Small tables in small cards scroll sideways instead of squeezing.** At the new text sizes the Phone forms table put one word of the mission name on each line and clipped a column. Tables in these cards now have a minimum width, and their headers never wrap.
 
 
-## The left panel follows the workflow (apps/web/index.html)
+## The left panel follows the workflow (frontend/index.html)
 
 - **Decision:** The navigation is grouped by the order work actually happens, with small section labels. Command centre stays on top as the home page, with no label.
 
@@ -68,7 +68,7 @@ Each entry: what we decided, why, and the option we did not take.
 - **Rejected:** hiding rarely used items behind a "More" menu. Nine items is few, and a hidden item is a lost item.
 - **Size:** the labels made the panel taller, so spacing was tightened slightly and the panel scrolls on very short screens. On a 900px-high screen everything fits.
 
-## Phone calls page: status first, calls as rows, forms as a list (apps/web/src/main.js, `renderCalls`)
+## Phone calls page: status first, calls as rows, forms as a list (frontend/src/pages/phone-calls.js, `renderCalls`)
 
 - **Decision:** The page now reads top to bottom as: a strip of four small tiles (Connection, Calls, Who can be called, Finished calls), then the calls, then the phone forms.
 - **Calls as rows, not a six-column table.** Each call is one row: status, person (opens the case), what was asked and why, when it was requested and how long it lasted. The recording and transcript sit underneath. A row of small counts (scheduled, in progress, completed, not answered, failed) shows only what exists.
@@ -79,13 +79,13 @@ Each entry: what we decided, why, and the option we did not take.
 - **Why:** The old layout squeezed a table into a narrow card (the mission name wrapped one word per line and a column was hidden), led with setup instead of the calls, and left a tall empty area.
 - **Not changed:** the recording player is the browser's own audio control. A custom player would be a separate piece of work.
 
-## The Mission field in "Add participants" is always shown (apps/web/src/main.js, `openImportModal`)
+## The Mission field in "Add participants" is always shown (frontend/src/pages/cases/import-modal.js, `openImportModal`)
 
 - **Decision:** The dialog always shows which mission the participants will join. With one mission it shows that mission and adds "Only one mission exists at the moment." With two or more it is a dropdown to choose from.
 - **Why:** The field used to appear only once a second mission existed. It seemed to come and go (for example after the local dev server restarted and forgot the missions that were created), and people could not tell which mission they were adding people to.
 - **Nothing else changed:** the default mission is still pre-selected and sent with the import, as before.
 
-## One mission filter on the Command centre (apps/web/src/dashboard.js, `renderOverview` in main.js)
+## One mission filter on the Command centre (frontend/src/pages/overview/dashboard.js, `renderOverview` in frontend/src/pages/overview/index.js)
 
 - **Decision:** A single dropdown filters the whole Command centre by mission. It lives in its own slim bar under the greeting and above the numbers, because it controls what is below it. The header keeps only the main action ("Add participants"). The first option is "All missions" (what the page always showed). Then one option per mission.
 - **The bar:** "Mission [dropdown]", a **Clear** link that appears only when a mission is picked, and a line saying what is shown ("Showing all 17 participants", "Showing 12 of 17 participants"). A picked mission gives the box a soft teal tint, so it is obvious the page is filtered. The bar is updated in place, so the open dropdown and the motion are not disturbed.
@@ -99,7 +99,7 @@ Each entry: what we decided, why, and the option we did not take.
 - **Motion:** numbers count to their new value over about half a second, the donut slices glide, the bars slide (a CSS width transition), and the two lists fade and slide briefly. Only opacity, position and width move. If you change the filter part-way through, it continues from where it is. If the person's system asks for less motion, everything changes instantly. The page is updated in place (not redrawn), which is what lets it move, and it is redrawn only when its shape changes (empty or not).
 - **Accessibility:** a hidden live line announces the result ("Showing 5 participants for Placement Check.").
 
-## The "Create a mission" form (Mission Studio): clearer, same behaviour (apps/web/src/main.js, `openStudioModal`)
+## The "Create a mission" form (Mission Studio): clearer, same behaviour (frontend/src/pages/missions/studio.js, `openStudioModal`)
 
 - **Decision:** Only the form screen was redesigned. The drafting call, the field ids, the draft screen and what is saved are unchanged.
 - **What changed:**
@@ -114,7 +114,7 @@ Each entry: what we decided, why, and the option we did not take.
 - **The limits are copied from the server's brief schema** (name 3 to 100, goal at least 20, people at least 10, and so on). If the schema changes, the form's copy needs the same change.
 - **Not changed on purpose:** the "Read the draft" screen, which still shows internal names and keeps "Edit as JSON" beside Save.
 
-## The case panel (right-hand drawer) has a header, a summary and four tabs (apps/web/src/main.js, `openCase`)
+## The case panel (right-hand drawer) has a header, a summary and four tabs (frontend/src/components/case-drawer.js, `openCase`)
 
 - **Decision:** The panel was one long scroll. It is now a header, a short summary, the next step, and four tabs: Overview, Conversation, Phone calls, Activity. The data, the buttons and every element id are unchanged.
 - **Header:** initials avatar, case id, batch and place, and a coloured status pill.
@@ -125,7 +125,7 @@ Each entry: what we decided, why, and the option we did not take.
 - **Delete case:** moved to a danger zone at the bottom of Overview, away from the everyday buttons.
 - **Width:** `min(560px, 94vw)`.
 
-## Reading free-text replies on WhatsApp (packages/core/src/classifier.ts, conversation.ts, packages/adapters/src/classifier.ts)
+## Reading free-text replies on WhatsApp (backend/packages/core/src/conversation/classifier.ts, conversation.ts, backend/packages/adapters/src/classifier.ts)
 
 - **Decision:** Improve the reader we have, in place. No new path, and the mission JSON, the evidence keys and the API are unchanged.
 - **A number is a pick only when it stands alone.** "2 months ago I left my job" used to select option 2 because only the first word was looked at.
@@ -141,7 +141,7 @@ Each entry: what we decided, why, and the option we did not take.
 - **Not changed:** the model is still off unless `DOZAI_CLASSIFIER=claude`. Nothing here turns on external processing. The model never writes to a participant.
 - **"Last few messages" means** the last three questions asked and what was understood from each reply. The participant's own raw messages are not stored anywhere new.
 
-## How the conversation sounds: thank-yous, gentler re-asks, "what do you mean" (packages/core/src/phrases.ts)
+## How the conversation sounds: thank-yous, gentler re-asks, "what do you mean" (backend/packages/core/src/conversation/phrases.ts)
 
 - **Decision:** Add a few fixed phrases around the approved questions. The questions, options, branching and the instrument's own messages are unchanged, and no model writes anything a participant sees.
 - **Where the wording lives:** in code (`phrases.ts`), not in the mission JSON, so the mission schema does not change. A mission may be given its own wording later if the programme team wants to approve it per mission.
@@ -150,7 +150,7 @@ Each entry: what we decided, why, and the option we did not take.
 - **"What do you mean":** how to reply, then the same question. It counts as a re-ask, so a participant who keeps asking is handed to a person and the conversation cannot loop. It does not explain the question's meaning, because explanations are mission content that someone has to approve.
 - **Language:** English, and Hindi written in English letters, picked from the participant's language. The Hindi lines avoid gendered verbs. The wording was not reviewed by a Hindi speaker.
 
-## WhatsApp and phone calls follow the same flow (packages/core/src/flow.ts, voice.ts)
+## WhatsApp and phone calls follow the same flow (backend/packages/core/src/missions/flow.ts, voice.ts)
 
 - **Decision:** Keep the two descriptions of a mission (the questionnaire and the list of evidence needed), and check that they agree, instead of merging them. Merging would change the mission JSON.
 - **The check:** every path through the questionnaire is listed, and for each one a call must ask the same keys in the same order. The built-in mission passes on all four branches, and the test would fail if either side drifted.
@@ -158,7 +158,7 @@ Each entry: what we decided, why, and the option we did not take.
 - **A call's answers follow WhatsApp's rules:** free text must be real text, an answer for a question this person would not be asked is dropped, and an unclear answer never replaces a clear one. These applied only to WhatsApp before. A voice answer whose condition cannot be checked yet is kept.
 - **Not made identical:** wording and confidence. See docs/VOICE.md.
 
-## Reviewing, editing and adding questions on screen (apps/web/src/questions.js, packages/core/src/questions.ts)
+## Reviewing, editing and adding questions on screen (frontend/src/components/question-editor.js, backend/packages/core/src/missions/questions.ts)
 
 - **Decision:** Question management happens in the existing flow. Before the first save, edits are made to the draft in the browser and the one draft is saved. At sign-off, edits go into the mission being approved, through an optional `edits` on the sign-off request (see "Signing off approves the same mission" below). The mission JSON and its field names are unchanged.
 - **The same screen twice.** One editor is used in the create flow and on the Mission page. Each question is a card with the WhatsApp wording and the phone wording side by side. The phone wording comes from the server (`POST /api/missions/check`), so it is never a second copy of the rule that turns a written question into speech.
@@ -170,7 +170,7 @@ Each entry: what we decided, why, and the option we did not take.
 - **The live check** is the same one a saved mission must pass, plus the WhatsApp/phone agreement check and repeats. It ignores the version name, so the built-in mission can be reviewed. Sign-off and save stay disabled while it reports problems.
 - **Not built:** moving questions up and down, changing the kind of answer, editing the fixed messages or the answers to common questions, and editing branching on screen.
 
-## Signing off approves the same mission, in place (packages/core/src/service.ts, `signOffMission`)
+## Signing off approves the same mission, in place (backend/packages/core/src/cases/service.ts, `signOffMission`)
 
 - **What was wrong:** Sign-off saved a COPY under a new name (`<version>-signed`). The unsigned original stayed in the list, so every sign-off looked like a duplicate mission, and the people already on the original stayed on unsigned wording. Nothing was triggered twice: it was the design.
 - **Decision:** Sign-off approves the same mission. Same version name, same place in the list, no second mission. It records who signed and when (set by the platform, whatever the request says) and keeps the original creation time and author.
@@ -182,7 +182,7 @@ Each entry: what we decided, why, and the option we did not take.
 - **The phone form** link is kept. The form shows as "out of date" because the mission changed, and is published again.
 - **Not done:** no way to move people from an old version to a newer one, because nothing creates a newer copy any more.
 
-## One way of showing that something is loading (apps/web/src/busy.js)
+## One way of showing that something is loading (frontend/src/components/busy.js)
 
 - **What was missing:** Most buttons that call the server gave no sign that anything was happening: a few said "Saving…", one screen had a bar, the rest did nothing, so people clicked again. Pages that wait for data said "Loading…" in plain text, in different ways.
 - **Decision:** One mechanism, in one place, instead of a loader written by hand for each of about 45 actions. Every request goes through `api()`, which reports its start and end to `busy.js`. New buttons that call the server get the behaviour without any extra code.
@@ -196,7 +196,7 @@ Each entry: what we decided, why, and the option we did not take.
 - **Auto-opening the mission questions** will not retry by itself after a failure; the button comes back for a person to press. (A retry loop would have followed from showing a loading line.)
 - **Not changed:** every API call and its contract, the layout of every screen, and the existing progress bar on the Create a mission draft step.
 
-## The phone wording is read only, and questions are shown by category (questions.js, questions.ts, studio.ts)
+## The phone wording is read only, and questions are shown by category (question-editor.js, questions.ts, studio.ts)
 
 - **The phone questions are not a separate list.** The voice agent's question is worked out from each question, or taken from its optional `spoken` field. So "ZoLabs questions cannot be edited" means the phone wording cannot be edited. Remove and Add stay, because they act on the whole question for both channels.
 - **No box for it anywhere.** The Edit and Add forms have no phone-wording box. The editing code ignores any phone wording it is given, so the screen cannot be used to change it.
@@ -205,3 +205,14 @@ Each entry: what we decided, why, and the option we did not take.
 - **Categories reuse `module`.** No new field. The prompt changes from "group by branch" to "give every question a category by purpose", names are tidied, and a model's draft with four or more questions in one category is sent back to be grouped. The plain draft has no model, so it sorts by simple rules and is not held to the one-group check.
 - **The screen shows each category as a heading with its count.** Moving a question to another category, or naming a new one, is a dropdown on Edit and Add. The category is only a label: it does not change the order or the branching.
 - **Not built:** reordering questions, renaming a category for all its questions at once, and per-category rules.
+
+## Folders: frontend and backend, grouped by subject (whole repository)
+
+- **Top level.** `apps/web` became `frontend`. `functions`, `appsail` and `packages` moved under `backend`. Build output still goes to `client/` at the project root, where Catalyst looks for it.
+- **Names that must not change.** `core_api`, `cron_tick` and `mcp-gateway` stay as they were: the folder name is part of the public web address, and the webhooks and the scheduler point at it.
+- **Frontend.** One script file of 1,418 lines (`main.js`) and one stylesheet of 909 lines were split. Code moved word for word; only the `import` and `export` lines are new. `lib/` holds data and helpers, `components/` holds reusable pieces, `pages/` holds one thing per screen. The page frame is `shell.js`. `lib/api.js` tells the frame to redraw through `onLoaded(...)`, so `lib/` does not depend on `pages/`.
+- **Stylesheet.** Split into files in the **same order** as the original, joined by `styles/index.css`. Later rules win over earlier ones, so reordering would change how screens look. The production CSS came out byte for byte the same.
+- **API.** `app.ts` is a short list of route groups, and each group is a file in `routes/`. The groups are registered in the same order as before. A script compared the full list of routes (order, method, path) before and after for three setups and it was identical.
+- **Core.** `packages/core/src` was 27 files side by side. They are now in `missions/`, `conversation/`, `agent/`, `storage/` and `cases/`. Only import paths changed. `adapters` is left flat: it has eight files and they belong together.
+- **What is lost.** Nothing was renamed and no logic was changed, so the change is mostly moves. Git shows moved files as renames, but the history of a split file (old `main.js`, `styles.css`, `app.ts`) does not follow into the new files. To read the old history, look at the commit just before the split.
+- **Not changed.** Unused prototype styles (journey and phone-chat preview) were kept and labelled. Removing them is a separate, visible change.

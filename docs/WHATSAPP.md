@@ -4,11 +4,11 @@
 
 Outbound: `InteraktChannels` sends approved templates through `POST https://api.interakt.ai/v1/public/message/`.
 Inbound: Interakt calls our webhook; the handler verifies the signature, stores the event in the inbox, returns 200, then applies it to the case.
-Code: `packages/adapters/src/interakt.ts`. Tests: `packages/adapters/src/interakt.test.ts`.
+Code: `backend/packages/adapters/src/interakt.ts`. Tests: `backend/packages/adapters/src/interakt.test.ts`.
 
 ## One-time setup
 
-1. **Interakt: templates.** Create and get approved a template named exactly as `provider_name` in `packages/core/src/mission.ts`
+1. **Interakt: templates.** Create and get approved a template named exactly as `provider_name` in `backend/packages/core/src/missions/mission.ts`
    (`placement_intro_v1`, language `en`, body variables `{{1}}` first name and `{{2}}` programme name; add a Quick Reply button "Yes, continue" and "No, stop").
    Hindi: `placement_intro_hi_v1`. Interakt rejects template names that differ in any character.
 2. **Interakt: webhook.** Developer Settings > Webhook:

@@ -18,4 +18,4 @@ The **unique** flag on `uniq_key` is what makes the atomic version check safe. D
 
 Then set the table's permissions so **only the project's functions** (admin scope) can read and write it.
 
-Why one table: see the header comment in `packages/core/src/docstore.ts`.
+Why one table: see the header comment in `backend/packages/core/src/storage/docstore.ts`.
