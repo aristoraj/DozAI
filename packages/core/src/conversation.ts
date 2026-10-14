@@ -9,10 +9,13 @@ import { newId } from "./ledger";
 import { DozaiError, type CaseService } from "./service";
 import { validateAnswer, type ReplyClassifier } from "./classifier";
 import { clarifyLine, langOf, reaskHint, thanks } from "./phrases";
+import { factsOf, replyProblem, type ConversationResponder } from "./responder";
 import { DRAFT_INSTRUMENT, firstQuestion, nextQuestionId, questionById, renderQuestion, type Instrument, type Question } from "./instrument";
 
 export interface RunnerDeps {
   classifier: ReplyClassifier;
+  /** Writes a reply when the participant asks something of their own. Without one, or when it declines, the approved wording is used. */
+  responder?: ConversationResponder;
   instrument?: Instrument;
   /** A draft instrument is only used on real conversations when this is set (development and testing). */
   allowDraft?: boolean;
@@ -30,6 +33,8 @@ export interface ReplyResult {
 
 const DAY = 24 * 60 * 60 * 1000;
 const CONSENT_PROMPT = "Reply YES to continue, or STOP to end.";
+/** After this many replies to the participant's own questions without reaching an answer, a person takes over. */
+const MAX_SIDE_TURNS = 5;
 
 export class ConversationRunner {
   constructor(private svc: CaseService, private deps: RunnerDeps) {}
@@ -51,6 +56,7 @@ export class ConversationRunner {
 
     let st = (await svc.store.getConversation(tenant, caseId)) ?? this.fresh(tenant, caseId);
     st.last_inbound_at = svc.now().toISOString();
+    st.transcript = [...(st.transcript ?? []), { at: st.last_inbound_at, text: text.trim() ? text.trim().slice(0, 200) : "(no text: a picture, voice note or other file)" }].slice(-12);
     if (["done", "escalated", "stopped"].includes(st.status)) { await svc.store.putConversation(st); return { handled: false, action: "ignored", detail: `conversation is ${st.status}` }; }
 
     // A draft questionnaire must not reach real people by accident.
@@ -87,13 +93,14 @@ export class ConversationRunner {
       case "distress": { st = await this.escalate(c, st, ins, "urgent_distress_or_complaint", "The participant raised a complaint or a safety concern. A person should respond promptly.", ins.distress_message); return { handled: true, action: "escalated", detail: "distress" }; }
       case "deletion": { st = await this.escalate(c, st, ins, "deletion_request", "The participant asked for their data to be deleted.", ins.deletion_message); return { handled: true, action: "escalated", detail: "deletion_request" }; }
       case "faq": {
+        const talked = await this.converse(c, st, ins, q, context, cls, text); if (talked) return talked;
         const entry = ins.faq.find(f => f.id === cls.faq_id) ?? ins.faq[0]!;
         await this.say(c, st, ins, `${entry.answer}\n\n${context === "consent" ? CONSENT_PROMPT : renderQuestion(q!)}`, "faq");
         return { handled: true, action: "faq", detail: entry.id };
       }
-      case "clarify": return this.reask(c, st, ins, q, context, false, "clarify");
+      case "clarify": return (await this.converse(c, st, ins, q, context, cls, text)) ?? this.reask(c, st, ins, q, context, false, "clarify");
       case "off_topic":
-      case "unclear": return this.reask(c, st, ins, q, context, text.trim() === "");
+      case "unclear": return (await this.converse(c, st, ins, q, context, cls, text)) ?? this.reask(c, st, ins, q, context, text.trim() === "");
       case "answer": return context === "consent" ? this.begin(c, st, ins, consent) : this.apply(c, st, ins, q!, cls);
     }
   }
@@ -170,6 +177,7 @@ export class ConversationRunner {
     if (finished || !cur) {
       st.status = "done"; st.current = null;
       await this.say(c, st, ins, ins.closing_message, "closing");
+      await this.svc.beginEvaluation(c.tenant_id, c.case_id, "conversation-runner"); // the answers are in: the case now waits for the agent to judge them, not for a reply
       return { handled: true, action: "finished", finished: true };
     }
     st.current = cur.id;
@@ -181,8 +189,38 @@ export class ConversationRunner {
   private async langFor(c: CaseRecord) { return langOf((await this.svc.store.getParticipant(c.tenant_id, c.participant_id))?.language); }
 
   /** What the mission is about, for a reader that understands meaning. Missing is fine: the flow does not depend on it. */
-  private async missionContext(c: CaseRecord): Promise<{ programme?: string; objective?: string } | undefined> {
-    try { const m = await this.svc.getMission(c.tenant_id, c.mission_version); return { programme: m.programme_name ?? undefined, objective: m.objective ?? undefined }; } catch { return undefined; }
+  private async missionContext(c: CaseRecord): Promise<{ programme?: string; objective?: string; guidance?: string } | undefined> {
+    try { const m = await this.svc.getMission(c.tenant_id, c.mission_version); return { programme: m.programme_name ?? undefined, objective: m.objective ?? undefined, guidance: m.agent_guidance ?? undefined }; } catch { return undefined; }
+  }
+
+  /**
+   * The participant said something of their own (a question, a worry, a greeting) instead of answering. Write a reply to it from what the
+   * programme has approved us to say, then ask the question again underneath, so the interview carries on. Returns null when nothing is
+   * written (no writer, the agent-written messages are not on automatic, nothing to answer, or the reply was refused): the approved
+   * wording is used then.
+   */
+  private async converse(c: CaseRecord, st: ConversationState, ins: Instrument, q: Question | null, context: "consent" | "question", cls: Classification, text: string): Promise<ReplyResult | null> {
+    const responder = this.deps.responder;
+    if (!responder || !text.trim() || (context === "question" && !q)) return null;
+    if ((st.side_turns ?? 0) >= MAX_SIDE_TURNS) return null;
+    const controls = await this.svc.controls(c.tenant_id);
+    if (controls.autonomy.message_free !== "automatic" || controls.paused) return null; // written replies wait for a person unless the programme turned them on
+    const person = await this.svc.store.getParticipant(c.tenant_id, c.participant_id);
+    const mission = await this.missionContext(c);
+    let out;
+    try {
+      out = await responder.respond({
+        text, question: q, context, mission: { programme: mission?.programme, objective: mission?.objective, guidance: mission?.guidance }, facts: factsOf(ins),
+        recent: q ? [{ from: "us", text: renderQuestion(q) }] : [{ from: "us", text: CONSENT_PROMPT }], language: person?.language, names: [person?.display_name ?? "", person?.first_name ?? ""],
+      });
+    } catch { return null; }
+    if (!out || out.kind === "noise" || !out.reply.trim()) return null;
+    const problem = replyProblem(out.reply);
+    if (problem) { await this.svc.emit(c, "reply_handled", "conversation-runner", `A written reply was not used: ${problem}`, { refused: true }); return null; }
+    st.side_turns = (st.side_turns ?? 0) + 1;
+    await this.svc.emit(c, "reply_handled", "conversation-runner", out.kind === "unknown" ? "The participant asked something the programme has not approved an answer for. They were told so and the interview carried on." : "Answered the participant's question, then asked the question again", { converse: true, kind: out.kind, intent: cls.intent });
+    await this.say(c, st, ins, `${out.reply.trim()}\n\n${context === "consent" ? CONSENT_PROMPT : renderQuestion(q!)}`, "faq", q?.id, true);
+    return { handled: true, action: "faq", detail: "conversation" };
   }
 
   private async reask(c: CaseRecord, st: ConversationState, ins: Instrument, q: Question | null, context: "consent" | "question", noText: boolean, mode: "reask" | "clarify" = "reask"): Promise<ReplyResult> {
@@ -210,7 +248,7 @@ export class ConversationRunner {
   }
 
   /** Queue an approved message. Checks every limit that applies to a free-form reply. */
-  private async say(c: CaseRecord, st: ConversationState, ins: Instrument, text: string, kind: "question" | "faq" | "reask" | "closing" | "handover", questionId?: string): Promise<void> {
+  private async say(c: CaseRecord, st: ConversationState, ins: Instrument, text: string, kind: "question" | "faq" | "reask" | "closing" | "handover", questionId?: string, free = false): Promise<void> {
     const now = this.svc.now().getTime();
     const person = await this.svc.store.getParticipant(c.tenant_id, c.participant_id);
     if (!person || person.consent === "declined") throw new DozaiError("CONTACT_NOT_ALLOWED", "participant opted out");
@@ -218,7 +256,7 @@ export class ConversationRunner {
     if (now - last > (this.deps.sessionWindowMs ?? DAY)) throw new DozaiError("SESSION_WINDOW_CLOSED", "more than 24 hours since the participant's last message");
     if (st.messages_sent >= ins.max_messages) throw new DozaiError("MESSAGE_CAP", "message limit for this case reached");
     st.messages_sent += 1;
-    await this.svc.queueOutbox(c, "whatsapp_text", { text, kind, question: questionId ?? null }, `conv:${c.case_id}:${st.messages_sent}`);
+    await this.svc.queueOutbox(c, "whatsapp_text", { text, kind, question: questionId ?? null, ...(free ? { free: true } : {}) }, `conv:${c.case_id}:${st.messages_sent}`);
     await this.svc.emit(c, "question_asked", "conversation-runner", kind === "question" ? `Question sent: ${questionId}` : `Message sent: ${kind}`, { kind, question: questionId ?? null });
     await this.svc.store.putConversation(st);
   }

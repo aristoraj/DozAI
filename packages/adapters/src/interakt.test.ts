@@ -27,7 +27,8 @@ describe("phone encryption", () => {
     expect(blob).not.toContain(PHONE);
     expect(decryptPhone(KEY, blob)).toBe(PHONE);
     expect(phoneHash(KEY, PHONE)).toBe(phoneHash(KEY, phoneDigits("+91 98765-43210")));
-    expect(() => decryptPhone(KEY, blob.slice(0, -2) + "xx")).toThrow();
+    const mid = Math.floor(blob.length / 2);                                   // change one character in the middle to a different one: always a real change
+    expect(() => decryptPhone(KEY, blob.slice(0, mid) + (blob[mid] === "A" ? "B" : "A") + blob.slice(mid + 1))).toThrow();
     expect(() => decryptPhone(randomBytes(32).toString("base64"), blob)).toThrow();
   });
 });

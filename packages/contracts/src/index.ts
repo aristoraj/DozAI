@@ -495,6 +495,10 @@ export const ConversationStateSchema = z.object({
   messages_sent: z.number().int().nonnegative(),
   last_inbound_at: z.string().nullable(),
   escalation_reason: z.string().optional(),
+  /** How many times the participant asked something of their own and got a written reply, so a chat that never reaches the questions is handed to a person. */
+  side_turns: z.number().int().nonnegative().optional(),
+  /** What the participant wrote, most recent last (the last twelve, each cut to 200 characters), so the case shows the whole conversation. Erased with the case. */
+  transcript: z.array(z.object({ at: z.string(), text: z.string().max(200) })).max(12).optional(),
   /** Answers the participant gave before we asked for them, by evidence key. Used when the flow reaches that question. */
   held: z.record(z.string(), z.object({ option_key: z.string().optional(), value: z.string().optional(), confidence: z.number() })).optional(),
 });

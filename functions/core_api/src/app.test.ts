@@ -445,6 +445,26 @@ describe("conversation over the API", () => {
     expect((await call("GET", `/cases/${id}/conversation`)).json.answered).toBe(1);
   });
 
+  it("the thread shows what the participant actually wrote, in order with the replies it got, not only the answers recorded", async () => {
+    const { call, svc } = start();
+    const r = await call("POST", "/participants/import", { rows: [row], consent_attested: true });
+    const id = r.json.created[0].case_id as string;
+    await svc.beginSession("tenant_demo", id, "test");
+    await call("POST", `/cases/${id}/simulate-reply`, { text: "yes" });
+    await call("POST", `/cases/${id}/simulate-reply`, { text: "Who are you? Why do you need this?" });
+    await call("POST", `/cases/${id}/simulate-reply`, { text: "2" });
+    const thread = (await call("GET", `/cases/${id}/conversation`)).json.messages as { from: string; text: string }[];
+    const mine = thread.filter(m => m.from === "participant").map(m => m.text);
+    expect(mine).toEqual(["yes", "Who are you? Why do you need this?", "2"]);          // their own words, each once
+    const at = (re: RegExp) => thread.findIndex(m => re.test(m.text));
+    expect(at(/^yes$/)).toBeLessThan(at(/Which of these describes you best/));          // they said yes, then we asked the question
+    expect(at(/Which of these describes you best/)).toBeLessThan(at(/^2$/));            // then they answered it
+    expect(thread.some(m => m.from === "system" && /Which of these describes you best/.test(m.text))).toBe(true);
+    // erasing the case erases what they wrote
+    expect((await call("POST", `/cases/${id}/delete`, { confirm: id, reason_code: "participant_request" }, "admin")).status).toBe(200);
+    expect(JSON.stringify(await svc.store.getConversation("tenant_demo", id) ?? null)).not.toContain("Who are you");
+  });
+
   it("the case page says which things are known, which are missing and which do not match", async () => {
     const { call, svc } = start();
     const r = await call("POST", "/participants/import", { rows: [row], consent_attested: true });

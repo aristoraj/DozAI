@@ -114,6 +114,13 @@ export async function tick(
       try {
         await deps.agent.resumeCase(svc, tenant, w.case_id);
         resumed.push(w.case_id);
+        // The interview was finished and the agent looked at it but reached no decision: do not leave the case waiting on nothing.
+        // One more try a little later (the model may have misread), then a person decides.
+        const after = await svc.store.getCase(tenant, w.case_id);
+        if (after && after.status === "evaluating") {
+          if (await svc.store.claim(`nodecision:${w.case_id}:1`)) await later(w.case_id, 5 * 60_000);
+          else { try { await svc.requestReview(tenant, w.case_id, after.version, "no_decision", "The interview finished, but the agent did not reach a decision. A person should look.", "policy-engine"); } catch (e2) { console.error("no-decision handover", w.case_id, (e2 as Error).message); } }
+        }
       } catch (e) {
         const msg = (e as Error).message.slice(0, 160);
         resume_errors.push({ case_id: w.case_id, error: msg });
@@ -149,6 +156,10 @@ export async function tick(
       try {
         await svc.emit(c, "wake_fired", "scheduler", `Woke the agent (${t.reason.replace("_", " ")})`, { wake_id: t.wake_id, reason: t.reason });
         await deps.agent.resumeCase(svc, tenant, t.case_id, t);
+        if (t.reason === "evidence_ready") { // this was the second look at a finished interview: if it is still undecided, a person decides
+          const after = await svc.store.getCase(tenant, t.case_id);
+          if (after && after.status === "evaluating") { try { await svc.requestReview(tenant, t.case_id, after.version, "no_decision", "The interview finished, but the agent did not reach a decision. A person should look.", "policy-engine"); } catch (e2) { console.error("no-decision handover", t.case_id, (e2 as Error).message); } }
+        }
         await finish("done", "agent woken");
         wakes.fired.push(t.case_id);
       } catch (e) {

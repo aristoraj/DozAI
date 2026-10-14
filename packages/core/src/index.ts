@@ -24,3 +24,4 @@ export * from "./replay";
 export * from "./studio";
 export * from "./questions";
 export * from "./outcomes";
+export * from "./responder";

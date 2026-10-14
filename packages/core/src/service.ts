@@ -254,6 +254,14 @@ export class CaseService {
     return next;
   }
 
+  /** An interview just finished: the case stops waiting for a reply and waits for the agent to judge the answers. Safe to call twice; does nothing for a case in any other state. */
+  async beginEvaluation(tenant: string, caseId: string, actor: string): Promise<void> {
+    const c = await this.getCase(tenant, caseId);
+    if (!["running", "waiting"].includes(c.status)) return;
+    try { await this.transition(tenant, caseId, c.version, "evaluating", { actor, summary: "Interview finished: evaluating the answers", patch: { next_action: "The interview is finished. The agent is judging the answers." } }); }
+    catch (e) { if (!(e instanceof DozaiError && e.code === "VERSION_CONFLICT")) throw e; } // another writer moved the case first
+  }
+
   /** Walk legal steps to `evaluating` (used when a response or proposal arrives). */
   private async toEvaluating(c: CaseRecord, actor: string): Promise<CaseRecord> {
     if (c.status === "evaluating") return c;

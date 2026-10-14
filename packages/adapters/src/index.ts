@@ -202,6 +202,7 @@ export * from "./claude";
 export * from "./interakt";
 export * from "./jobs";
 export * from "./classifier";
+export * from "./responder";
 export * from "./voice";
 export * from "./zolabs-auth";
 export * from "./claude-missions";
