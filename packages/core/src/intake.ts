@@ -1,6 +1,7 @@
 // Loading real participants. Contact numbers are encrypted and matched by keyed hash; names stay out of the ledger.
 import { MAX_IMPORT_ROWS, ParticipantRowSchema, type Participant, type Principal } from "@dozai/contracts";
 import { newId } from "./ledger";
+import { PLACEMENT_RETENTION_V1 } from "./mission";
 import { encryptPhone, maskPhone, normalizeMsisdn, phoneHash } from "./pii";
 import { DozaiError, type CaseService } from "./service";
 
@@ -27,7 +28,12 @@ export async function importParticipants(
   // Choose the mission once, up front: an unknown mission refuses the whole batch instead of failing row by row.
   const mission = opts.missionVersion ? await svc.getMission(p.tenant_id, opts.missionVersion) : await svc.defaultMission(p.tenant_id);
   const result: ImportResult = { created: [], skipped: [] };
-  const seen = new Set((await svc.store.listParticipants(p.tenant_id)).map(x => x.phone_hash).filter((h): h is string => !!h));
+  // The same person can be in several missions (one case each), but only once in the same mission. So "already loaded" is judged against
+  // this mission's own cases. A deleted case no longer counts: its number was erased, and it can be added again.
+  const here = (await svc.store.listCases(p.tenant_id)).filter(c => !c.deleted_at && (c.mission_version ?? PLACEMENT_RETENTION_V1.version) === mission.version);
+  const hashOf = new Map((await svc.store.listParticipants(p.tenant_id)).filter(x => x.phone_hash).map(x => [x.participant_id, x.phone_hash as string]));
+  const seen = new Map<string, string>(); // number (keyed hash) -> the case it is already in, in this mission
+  for (const c of here) { const h = hashOf.get(c.participant_id); if (h) seen.set(h, c.case_id); }
   const actor = `${p.role}:${p.user_id}`;
 
   for (let i = 0; i < rawRows.length; i++) {
@@ -38,10 +44,10 @@ export async function importParticipants(
     const digits = normalizeMsisdn(r.phone, opts.defaultCountryCode);
     if (digits.length < 10 || digits.length > 15) { result.skipped.push({ row, reason: "phone: not a valid number" }); continue; }
     const hash = phoneHash(opts.piiKey, digits);
-    if (seen.has(hash)) { result.skipped.push({ row, reason: "phone: already loaded" }); continue; }
-    seen.add(hash);
+    if (seen.has(hash)) { result.skipped.push({ row, reason: `phone: already in this mission (${seen.get(hash)}). The same number can be added to a different mission.` }); continue; }
 
     const case_id = await nextCaseId(svc, p.tenant_id);
+    seen.set(hash, case_id);
     const participant: Participant = {
       participant_id: newId("ptc"), tenant_id: p.tenant_id, display_name: r.name, first_name: r.name.split(/\s+/)[0],
       phone_masked: maskPhone(digits), phone_enc: encryptPhone(opts.piiKey, digits), phone_hash: hash,

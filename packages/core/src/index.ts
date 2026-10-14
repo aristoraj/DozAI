@@ -22,3 +22,4 @@ export * from "./memory";
 export * from "./wake";
 export * from "./replay";
 export * from "./studio";
+export * from "./outcomes";

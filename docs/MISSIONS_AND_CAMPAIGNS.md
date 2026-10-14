@@ -77,3 +77,28 @@ A mission no longer has to be written as JSON. On the Mission page, **Create a m
 **Still JSON underneath, on purpose.** The structure lets the employee know what is still missing for each person, lets reports compare cases, and keeps questions in approved wording. "Add from JSON" remains for developers, and "Edit as JSON" on the review screen opens the draft for fine changes.
 
 Drafting uses the model, so the kill switch and the daily spend limit apply to it.
+
+## Status and result, in the mission's own words (14 October 2026)
+
+A case used to show one pill and one "outcome" column that mixed two different things, and the outcome used job words for every mission, so a finished feedback case could read **Confirmed** with the outcome **Awaiting response**.
+
+**Status** says where the case is in the process, in plain words: Not started, Waiting for a reply, In conversation, Call scheduled, On a call, Checking the answers, Needs a person, Complete (or Opted out, Cancelled).
+
+**Result** says what was found out, in the words of the mission. It has two parts:
+- The **finding**: one of the results the mission defines (\`outcomes\`: a key, a short label and a description). A placement check has Same job, Changed job, Currently unemployed, Education or training, Unclear. A feedback mission might have Satisfied, Mixed, Unhappy, Unclear. Mission Studio drafts them from the brief, and they are shown on the Mission page and in the draft review, so they are read and signed off with the rest of the wording.
+- The **verdict** under it, once the case is finished: confirmed, not confirmed or inconclusive, worded for the mission (\`verdict_labels\`: "Feedback collected", "No feedback", "Unclear" for feedback; plain words when a mission gives none).
+
+A case that is still in progress shows "—" and "Not known yet". It never claims to be "awaiting" something once it is finished.
+
+**The agent chooses the finding.** The mission's findings are part of the agent's brief, and \`decision_propose\` takes exactly one of them (\`livelihood_state\`, the original field name, is kept in stored data). The platform rejects a finding the mission does not list and tells the agent which are allowed, so a feedback mission can never end with "same job". A mission saved before this has no list, and uses the original placement findings.
+
+**The Command centre follows too.** One mission selected: the donut shows that mission's own first three findings and "other", and "confirmed" is worded the mission's way. Several missions together: the general results (confirmed, not confirmed, inconclusive), because job findings mean nothing for a feedback mission.
+
+## The same person in several missions (14 October 2026)
+
+A number used to be unique across the whole system, so someone in one mission could not be added to another. Now **the same number can be in different missions, once in each**:
+
+- **Import:** "already loaded" is judged against the mission being loaded into. The message says which case already has the number ("already in this mission (DZ-0007). The same number can be added to a different mission."). The same number written differently (+91 98765 43210) is still caught, and so is a repeat inside one file. A deleted case no longer counts: its number was erased, so it can be added again.
+- **One person, separate cases:** each mission gets its own participant record and case, with its own consent, conversation, evidence and result. Deleting one case erases that mission's record and leaves the person's case in another mission untouched.
+- **Replies:** WhatsApp replies arrive by phone number, so a reply goes to the open case the person was **last written to in** (the question they are answering), and to the most recently touched case when nothing was sent to either. A finished case never receives a reply.
+- **Not yet:** contact limits (attempts, hours) still count per case, not per person across missions, so a person in two missions can be contacted by both. A single contact budget per person is still to do. Deleting a case also clears any unprocessed raw inbound events for that number, which could include the other mission's if one was still waiting.

@@ -3,7 +3,7 @@
 // pinned to one mission version when it is created, so changing a mission never changes a conversation already running.
 //
 // The built-in mission below is the original placement and retention tracer. Cases created before missions existed use it.
-import { MissionInputSchema, type MissionInput, type Requirement, type Strategy } from "@dozai/contracts";
+import { LIVELIHOOD_STATES, MissionInputSchema, type MissionInput, type Requirement, type Strategy } from "@dozai/contracts";
 import { DEFAULT_POLICY, type ContactPolicy } from "@dozai/domain";
 import { DRAFT_INSTRUMENT, optionsOf, type Instrument } from "./instrument";
 
@@ -26,6 +26,10 @@ export interface MissionBundle {
   /** Which employee does this mission, and optionally an exact version. Without a version it follows the employee's current one. */
   employee_id?: string;
   employee_version?: string;
+  /** What the mission can find out about a person, in plain words. The agent proposes one, and the cases list shows its label. */
+  outcomes?: { key: string; label: string; description?: string }[];
+  /** What "confirmed", "not confirmed" and "inconclusive" mean for this mission. Left out: the plain words. */
+  verdict_labels?: { confirmed?: string; not_confirmed?: string; inconclusive?: string };
   /** The goal in a sentence: what the employee is trying to find out. */
   objective?: string;
   /** What must be known about each person. The agent works to close the gaps. */
@@ -64,6 +68,13 @@ export const PLACEMENT_RETENTION_V1: MissionBundle = {
   },
   instrument: DRAFT_INSTRUMENT,
   intro_template: "placement_intro_v1",
+  outcomes: [
+    { key: "same_job", label: "Same job", description: "Still works where the programme placed them." },
+    { key: "changed_job", label: "Changed job", description: "Works somewhere else now." },
+    { key: "not_employed", label: "Currently unemployed", description: "Not working at present." },
+    { key: "education_training", label: "Education or training", description: "Studying or in training." },
+    { key: "unreachable_unclear", label: "Unclear", description: "The answers do not settle it." },
+  ],
   objective: "Find out whether the participant still works where the programme placed them, or what they do now, and whether they want support.",
   evidence_requirements: [
     { key: "work_status", label: "Current work status", hint: "Same job, a different job, not working, or studying.", required: true, min_confidence: 0.6 },
@@ -159,8 +170,20 @@ export function requirementProblems(reqs: Requirement[], i: Instrument): string[
 }
 
 /** Everything wrong with a mission definition, in plain words. Empty means it can be saved. */
+/**
+ * Is this finding one the mission can end with? A mission lists its own findings; a mission that lists none uses the original
+ * placement ones. An empty finding is fine (the evidence did not settle it). Returns a plain sentence when it is not.
+ */
+export function findingProblem(m: { outcomes?: { key: string }[] }, key: string | null | undefined): string | null {
+  if (key === null || key === undefined) return null;
+  const allowed = m.outcomes?.map(o => o.key) ?? [...LIVELIHOOD_STATES];
+  return allowed.includes(key) ? null : `"${key}" is not one of this mission's findings. Use one of: ${allowed.join(", ")}, or leave it empty if the evidence does not settle it.`;
+}
+
 export function missionProblems(input: MissionInput): string[] {
   const out: string[] = [];
+  const seen = new Set<string>();
+  for (const o of input.outcomes ?? []) { if (seen.has(o.key)) out.push(`finding "${o.key}" is listed twice`); seen.add(o.key); }
   const keys = new Set<string>();
   for (const t of input.templates) { if (keys.has(t.key)) out.push(`template "${t.key}" is listed twice`); keys.add(t.key); }
   if (!keys.has(input.intro_template)) out.push(`intro_template "${input.intro_template}" is not in the templates list`);
@@ -196,7 +219,7 @@ export function bundleFromInput(input: MissionInput, by: string, now: Date): Mis
     policy_overrides: input.policy ? { ...input.policy } : undefined,
     programme_name: input.programme_name, agent_guidance: input.agent_guidance,
     employee_id: input.employee_id, employee_version: input.employee_version,
-    objective: input.objective, evidence_requirements: input.evidence_requirements, strategy: input.strategy,
+    objective: input.objective, evidence_requirements: input.evidence_requirements, strategy: input.strategy, outcomes: input.outcomes, verdict_labels: input.verdict_labels,
     created_at: now.toISOString(), created_by: by,
   };
 }

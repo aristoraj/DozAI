@@ -118,7 +118,7 @@ export class GatewayTools {
       case "mission_get_bundle": {
         if (i.mission_version_id !== s.mission_version) throw new DozaiError("MISSION_VERSION_MISMATCH", "this session is pinned to a different mission version");
         const b = await svc.getMission(s.tenant_id, s.mission_version);
-        return this.envelope(s, op, { version: b.version, objective: b.objective ?? null, evidence_requirements: b.evidence_requirements ?? [], strategy: b.strategy ?? null, intro_template: b.intro_template, instrument_signed_off: b.instrument_signed_off, modules: b.modules, templates: b.templates, contact_policy: svc.policyFor(b), rubric: b.rubric });
+        return this.envelope(s, op, { version: b.version, objective: b.objective ?? null, outcomes: b.outcomes ?? null, verdict_labels: b.verdict_labels ?? null, evidence_requirements: b.evidence_requirements ?? [], strategy: b.strategy ?? null, intro_template: b.intro_template, instrument_signed_off: b.instrument_signed_off, modules: b.modules, templates: b.templates, contact_policy: svc.policyFor(b), rubric: b.rubric });
       }
       case "case_get_timeline": {
         const evs = (await svc.store.listEvents(c.tenant_id, c.case_id)).slice(-i.limit);
@@ -145,11 +145,16 @@ export class GatewayTools {
       }
       case "callback_schedule": {
         needVersion();
-        const gate = await svc.gateContact(c);
-        if (!gate.allowed && gate.code !== "OUTSIDE_WINDOW") throw new DozaiError(gate.code, gate.message);
-        await svc.emit(c, "callback_scheduled", `agent:${s.session_id}`, `Callback scheduled in ${i.after_hours}h via ${i.channel}`, { after_hours: i.after_hours, channel: i.channel });
+        // Setting a reminder contacts nobody, so consent, contact hours and the attempt cap do not apply to it: they apply when the agent
+        // is woken and tries to contact the person. (Before, this was checked like a message, so a reminder set right after the first
+        // message was refused for "consent required", because the person had not replied yet.) Only someone who has opted out or declined
+        // is refused, because there is nothing left to look at again.
+        const person = await svc.store.getParticipant(c.tenant_id, c.participant_id);
+        if (person?.consent === "declined") throw new DozaiError("CONTACT_NOT_ALLOWED", "this person has opted out or declined, so there is nothing to look at again");
+        const via = i.channel ? ` (plan: ${i.channel === "voice" ? "a call" : "WhatsApp"})` : "";
+        await svc.emit(c, "callback_scheduled", `agent:${s.session_id}`, `The agent will look at this case again in ${i.after_hours}h${via}`, { after_hours: i.after_hours, ...(i.channel ? { channel: i.channel } : {}) });
         // A real timer: the agent is woken at that time, whatever else is happening.
-        const w = await svc.scheduleWake(c, { at: new Date(svc.now().getTime() + i.after_hours * 3_600_000), reason: "agent_requested", note: `via ${i.channel}`, by: `agent:${s.session_id}` });
+        const w = await svc.scheduleWake(c, { at: new Date(svc.now().getTime() + i.after_hours * 3_600_000), reason: "agent_requested", note: i.channel ? `via ${i.channel}` : undefined, by: `agent:${s.session_id}` });
         return this.envelope(s, op, { scheduled: true, after_hours: i.after_hours, wake_at: w.at });
       }
       case "voice_call_request": {

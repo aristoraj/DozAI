@@ -14,7 +14,7 @@ const DESCRIPTIONS: Record<ToolName, string> = {
   callback_schedule: "Set your own wake-up: you are woken after this many hours to look at the case again.",
   memory_note: "Remember one fixed fact about this person (best time to call, preferred channel, preferred language, short-contact preference). Nothing else can be stored.",
   voice_call_request: "Request a phone call, now or at a time inside the contact hours, with a short reason. The call asks only for what is still missing.",
-  decision_propose: "Propose an outcome with confidence and evidence references. Catalyst decides the final transition.",
+  decision_propose: "Propose a result: an outcome, one of the mission's own findings (livelihood_state), your confidence and evidence references. Catalyst decides the final transition.",
   review_request: "Create a human review task with a reason code.",
 };
 

@@ -3,7 +3,10 @@
 // By default NOTHING here can reach a real person: the store holds a made-up cohort, WhatsApp is simulated (type a reply on the case
 // page) and phone calls go to a simulator. The default agent is a script, so there is no key and no cost.
 //
-// Opt-ins, each read from .env.local (nothing is switched on by accident, and none of these is deployed):
+// Two env files, both gitignored. .env.local holds the keys and is also what deploy reads. .env.dev-local holds settings that exist only
+// for this computer and is never read by deploy; it overrides .env.local. The two switches below are read ONLY from .env.dev-local (or
+// the shell), never from .env.local, so a deploy file can never turn real sending on for a local run by accident. Keys come from either
+// file. Both are read once, at startup: restart the API after changing them.
 //   USE_CLAUDE=1               the real agent and Mission Studio drafting (a few cents a run; still messages nobody)
 //   DOZAI_LOCAL_WHATSAPP=1     REAL WhatsApp from this computer through Interakt. Messages go to the numbers you import. The made-up
 //                              cohort is NOT loaded, so no made-up number can ever be messaged. Needs INTERAKT_API_KEY,
@@ -14,14 +17,21 @@ import { createApp } from "../functions/core_api/src/app";
 import { mountMcp } from "../appsail/mcp-gateway/src/server";
 import { DEFAULT_POLICY } from "@dozai/domain";
 import { CaseService, ConversationRunner, DEMO_TENANT, GatewayTools, InMemoryStore, RuleClassifier, seedDemo } from "@dozai/core";
-import { ClaudeAgentRuntime, ClaudeMissionDrafter, FakeVoice, InteraktChannels, ScriptedAgentRuntime } from "@dozai/adapters";
+import { ClaudeAgentRuntime, ClaudeMissionDrafter, ClaudeReplyClassifier, FakeVoice, InteraktChannels, ScriptedAgentRuntime } from "@dozai/adapters";
 
 const PII_KEY = Buffer.alloc(32, 7).toString("base64"); // a fixed key: local numbers live in memory only and are lost on restart
 
-/** A setting from the environment, or from .env.local. */
-const fileEnv: Record<string, string> = {};
-if (existsSync(".env.local")) for (const l of readFileSync(".env.local", "utf8").split("\n")) { const i = l.indexOf("="); if (i > 0) fileEnv[l.slice(0, i)] = l.slice(i + 1).trim(); }
-const setting = (name: string): string | undefined => process.env[name] ?? (fileEnv[name] || undefined);
+const readEnvFile = (path: string): Record<string, string> => {
+  const out: Record<string, string> = {};
+  if (!existsSync(path)) return out;
+  for (const l of readFileSync(path, "utf8").split(/\r?\n/)) { const t = l.trim(); const i = t.indexOf("="); if (t && !t.startsWith("#") && i > 0) out[t.slice(0, i).trim()] = t.slice(i + 1).trim(); }
+  return out;
+};
+const keysFile = readEnvFile(".env.local"), devLocal = readEnvFile(".env.dev-local");
+/** A key or other setting: the shell, then .env.dev-local, then .env.local. */
+const setting = (name: string): string | undefined => process.env[name] ?? (devLocal[name] || keysFile[name] || undefined);
+/** A switch that changes what this computer is allowed to do: the shell or .env.dev-local only, never the file deploy reads. */
+const flag = (name: string): string | undefined => process.env[name] ?? (devLocal[name] || undefined);
 
 const store = new InMemoryStore();
 const svc = new CaseService(store, () => new Date(), { ...DEFAULT_POLICY, windowStartHour: 0, windowEndHour: 24 });
@@ -31,7 +41,7 @@ const voice = new FakeVoice();
 
 // Real WhatsApp from this computer: only when asked for, and only when everything it needs is present.
 let channel: InteraktChannels | undefined;
-const wantWhatsApp = setting("DOZAI_LOCAL_WHATSAPP") === "1";
+const wantWhatsApp = flag("DOZAI_LOCAL_WHATSAPP") === "1";
 if (wantWhatsApp) {
   const missing = ["INTERAKT_API_KEY", "INTERAKT_WEBHOOK_SECRET", "ANTHROPIC_API_KEY"].filter(k => !setting(k));
   if (missing.length) console.log(`DOZAI_LOCAL_WHATSAPP=1 was set but ${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} missing: WhatsApp stays simulated.`);
@@ -45,7 +55,7 @@ if (wantWhatsApp) {
 
 // The real agent: when asked for, and always when WhatsApp is live (a script cannot take part in a real conversation).
 let useClaude = false;
-if (setting("USE_CLAUDE") === "1" || channel) {
+if (flag("USE_CLAUDE") === "1" || channel) {
   if (!process.env.ANTHROPIC_API_KEY && setting("ANTHROPIC_API_KEY")) process.env.ANTHROPIC_API_KEY = setting("ANTHROPIC_API_KEY");
   useClaude = !!process.env.ANTHROPIC_API_KEY;
   if (!useClaude) console.log("USE_CLAUDE=1 was set but no ANTHROPIC_API_KEY was found: using the scripted agent.");
@@ -54,7 +64,7 @@ if (setting("USE_CLAUDE") === "1" || channel) {
 async function main() {
   if (!channel) await seedDemo(store); // with real WhatsApp, no made-up number may ever be messaged: start empty
   const app = createApp({
-    forRequest: () => ({ svc, agent: useClaude ? new ClaudeAgentRuntime(tools, { live: channel }) : new ScriptedAgentRuntime(tools), runner: new ConversationRunner(svc, { classifier: new RuleClassifier(), allowDraft: true }) }),
+    forRequest: () => ({ svc, agent: useClaude ? new ClaudeAgentRuntime(tools, { live: channel }) : new ScriptedAgentRuntime(tools), runner: new ConversationRunner(svc, { classifier: useClaude ? new ClaudeReplyClassifier(new RuleClassifier()) : new RuleClassifier(), allowDraft: true }) }),
     devAuth: true,
     pii: { key: PII_KEY, defaultCountryCode: "91" },
     voice: { port: voice, cfg: { piiKey: PII_KEY, callsEnabled: true }, tenant: DEMO_TENANT },

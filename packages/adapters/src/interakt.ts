@@ -302,7 +302,12 @@ async function applyEvent(svc: CaseService, tenant: string, piiKey: string, ev: 
   if (!people.length) return undefined; // unknown sender: ignore, never create cases from inbound messages
   const ids = new Set(people.map(p => p.participant_id));
   const cases = (await svc.store.listCases(tenant)).filter(c => ids.has(c.participant_id));
-  const target = cases.filter(c => c.status !== "complete").sort((a, b) => (b.last_touch ?? "").localeCompare(a.last_touch ?? ""))[0];
+  // The same number can be in several missions, each with its own case. A reply belongs to the case this person was last WRITTEN to in, because
+  // that is the question they are answering. (When it is a tie, or nothing was sent yet, the most recently touched case wins.)
+  const open = cases.filter(c => c.status !== "complete");
+  const lastWritten = new Map<string, string>();
+  if (open.length > 1) for (const o of await svc.store.listOutbox(tenant)) if (o.status === "sent" && (o.kind === "whatsapp_template" || o.kind === "whatsapp_text") && open.some(c => c.case_id === o.case_id)) { if (o.created_at > (lastWritten.get(o.case_id) ?? "")) lastWritten.set(o.case_id, o.created_at); }
+  const target = open.sort((a, b) => (lastWritten.get(b.case_id) ?? "").localeCompare(lastWritten.get(a.case_id) ?? "") || (b.last_touch ?? "").localeCompare(a.last_touch ?? ""))[0];
   if (!target) return undefined; // already finished: nothing to update
   const conv = await svc.store.getConversation(tenant, target.case_id);
   const cls = classifyReply(ev.text, { bareNoIsStop: conv?.status !== "asking" });
