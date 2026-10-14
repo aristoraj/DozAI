@@ -1,10 +1,10 @@
 // DozAI operator app. Everything shown here comes from the API: there is no sample data.
-import { initSelects } from "./select.js";
-import { initNumbers } from "./number.js";
-import { initFiles } from "./file.js";
-import { createQuestionEditor } from "./questions.js";
-import { createBusy, loadingLine, loadingState } from "./busy.js";
-import { ALL, OUTCOMES, casesFor, dashboardFor, donutGradient, legendHtml, paintDashboard } from "./dashboard.js";
+import { initSelects } from "./components/controls/select.js";
+import { initNumbers } from "./components/controls/number.js";
+import { initFiles } from "./components/controls/file.js";
+import { createQuestionEditor } from "./components/question-editor.js";
+import { createBusy, loadingLine, loadingState } from "./components/busy.js";
+import { ALL, OUTCOMES, casesFor, dashboardFor, donutGradient, legendHtml, paintDashboard } from "./pages/overview/dashboard.js";
 const API_BASE = (window.DOZAI_API_BASE || "/api").replace(/[/]$/, "");
 const CLOUD = API_BASE.startsWith("/server");
 const TZ = "Asia/Kolkata"; // all times are shown in India Standard Time
@@ -66,7 +66,7 @@ const csvCell = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
 const toCsv = (head, rows) => [head, ...rows].map(r => r.map(csvCell).join(",")).join("\n");
 
 // ---- API -------------------------------------------------------------------------------------------------------------------
-const busy = createBusy(); // holds the button that was just pressed, runs the top bar, and guards against double clicks (busy.js)
+const busy = createBusy(); // holds the button that was just pressed, runs the top bar, and guards against double clicks (components/busy.js)
 async function api(path, { method = "GET", body, silent = false } = {}) {
   const end = busy.begin({ silent }); // silent: refreshes that run by themselves, which must not look like work
   try { return await request(path, method, body); } finally { end(); }

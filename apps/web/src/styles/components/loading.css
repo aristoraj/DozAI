@@ -1,5 +1,5 @@
 /* Loading: the spinner, the top bar, and the held button. */
-/* ---- loading (busy.js): one spinner, one bar, one rule for every button ---- */
+/* ---- loading (components/busy.js): one spinner, one bar, one rule for every button ---- */
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes busyIn { to { width: 14px; margin-right: 0; opacity: 1; } }
 @keyframes busyPulse { 50% { opacity: .35; } }

@@ -284,7 +284,7 @@ describe("the live app", () => {
 
   it("filters the Command centre by mission: the numbers follow, and they match the server's own", async () => {
     const admin = { "x-dozai-role": "admin" };
-    const { summarize } = await import("./dashboard.js");
+    const { summarize } = await import("./pages/overview/dashboard.js");
     const serverCases = async () => (await (await fetch(base + "/api/cases", { headers: admin })).json()).cases as Record<string, any>[]; // eslint-disable-line @typescript-eslint/no-explicit-any
     const kpi = (k: string) => document.querySelector(`[data-kpi="${k}"]`)?.textContent;
     const stageCount = (k: string) => document.querySelector(`[data-stage="${k}"] [data-stage-count]`)?.textContent;

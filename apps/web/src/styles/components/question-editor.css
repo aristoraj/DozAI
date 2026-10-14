@@ -1,5 +1,5 @@
 /* Question editor: one card per question, WhatsApp and phone side by side. */
-/* ---- the question editor (questions.js): one card per question, WhatsApp and phone side by side ---- */
+/* ---- the question editor (components/question-editor.js): one card per question, WhatsApp and phone side by side ---- */
 .q-editor { display: grid; gap: 12px; }
 .q-list { display: grid; gap: 12px; }
 .q-card { border: 1px solid var(--line); border-radius: 14px; background: var(--white); padding: 14px; display: grid; gap: 12px; min-width: 0; }

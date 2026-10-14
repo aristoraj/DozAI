@@ -16,13 +16,13 @@ input[type="checkbox"]:checked::after { transform: rotate(45deg) scale(1); }
 input[type="checkbox"]:focus-visible { outline: 0; box-shadow: 0 0 0 3px rgba(44, 119, 113, 0.28); }
 input[type="checkbox"]:disabled { opacity: .5; cursor: not-allowed; }
 
-/* Custom file picker (src/file.js). The real <input type="file"> stays hidden inside .cf. */
+/* Custom file picker (components/controls/file.js). The real <input type="file"> stays hidden inside .cf. */
 .cf { position: relative; display: flex; align-items: center; gap: 10px; min-width: 0; }
 .cf .cf-native { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; opacity: 0; pointer-events: none; }
 .cf-name { min-width: 0; overflow: hidden; color: var(--muted); font-size: var(--fs-sm); text-overflow: ellipsis; white-space: nowrap; }
 .cf-name.has-file { color: var(--ink); font-weight: 700; }
 
-/* Custom dropdowns (src/select.js). The real <select> stays hidden inside .cs. */
+/* Custom dropdowns (components/controls/select.js). The real <select> stays hidden inside .cs. */
 .cs { position: relative; display: inline-block; max-width: 100%; min-width: 0; }
 .field .cs { display: block; }
 .cs .cs-native { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; opacity: 0; pointer-events: none; }
@@ -48,7 +48,7 @@ input[type="checkbox"]:disabled { opacity: .5; cursor: not-allowed; }
 .cs-option[aria-selected="true"] .cs-check { opacity: 1; }
 .cs-empty { padding: 9px 10px; color: var(--muted); font-size: var(--fs-sm); }
 
-/* Custom number fields (src/number.js). The browser's own arrows are hidden. */
+/* Custom number fields (components/controls/number.js). The browser's own arrows are hidden. */
 .cn { position: relative; }
 .cn input { padding-right: 62px; -moz-appearance: textfield; appearance: textfield; }
 .cn input::-webkit-inner-spin-button, .cn input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }

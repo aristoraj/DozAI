@@ -1,5 +1,5 @@
 /* Question categories and the read-only phone wording. */
-/* ---- categories and the read-only phone wording (questions.js) ---- */
+/* ---- categories and the read-only phone wording (components/question-editor.js) ---- */
 .q-group { display: grid; gap: 10px; }
 .q-group + .q-group { margin-top: 6px; }
 .q-group-title { display: flex; align-items: center; gap: 8px; margin: 6px 0 0; color: var(--ink); font-size: var(--fs-md); font-weight: 800; }

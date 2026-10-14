@@ -2,7 +2,7 @@
 // so an edit that would break the mission (or make WhatsApp and phone calls disagree) is caught here. Everything is made up.
 import { describe, it, expect } from "vitest";
 import { PLACEMENT_RETENTION_V1 as BUILT_IN, checkMissionDefinition, type Instrument } from "@dozai/core";
-import { addQuestion, categoriesOf, categoryKey, categoryTitle, defaultNext, findRepeat, normaliseWording, removeQuestion, slug, updateQuestion, whenText } from "./questions.js";
+import { addQuestion, categoriesOf, categoryKey, categoryTitle, defaultNext, findRepeat, normaliseWording, removeQuestion, slug, updateQuestion, whenText } from "./question-editor.js";
 
 type Def = { instrument: Instrument; evidence_requirements: { key: string; label: string; required?: boolean; when?: { key: string; in: string[] }; verify_when?: { key: string; in: string[] } }[] } & Record<string, unknown>;
 const fresh = (): Def => JSON.parse(JSON.stringify({
