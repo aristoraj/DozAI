@@ -228,6 +228,8 @@ export const QuestionSchema = z.object({
   text: text900,
   /** How to say it on a phone call, when the written wording does not work aloud. Left out: the written text is adapted automatically. */
   spoken: text900.optional(),
+  /** An open "anything else?" question: "no" or "nothing" is a fine answer. */
+  optional: z.boolean().optional(),
   options: z.array(QuestionOptionSchema).max(10).optional(),
   evidence_key: ident,
   next: z.array(z.object({ when: z.object({ equals: z.string().max(60) }).optional(), goto: z.string().nullable() })).max(12).optional(),

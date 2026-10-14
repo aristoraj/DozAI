@@ -180,7 +180,11 @@ export class InteraktChannels implements ChannelPort {
     let sent = 0;
     for (const o of await svc.store.listOutbox(tenant)) {
       if (o.status !== "pending" || (o.kind !== "whatsapp_template" && o.kind !== "whatsapp_text")) continue;
-      sent += (await (o.kind === "whatsapp_text" ? this.sendTextItem(svc, tenant, o) : this.sendOne(svc, tenant, o))) ? 1 : 0;
+      // Take the message before sending it. Every webhook (replies, and each "delivered" and "read" notice) starts a scheduler pass, so
+      // several passes can run at once and each would have seen this message as still pending and sent it again. One pass wins; a
+      // retry after a temporary failure is a new attempt and is allowed. A message is never sent twice, even if a pass dies halfway.
+      if (!(await svc.store.claim(`send:${o.outbox_id}:${o.attempts}`))) continue;
+      sent +=(await (o.kind === "whatsapp_text" ? this.sendTextItem(svc, tenant, o) : this.sendOne(svc, tenant, o))) ? 1 : 0;
     }
     return sent;
   }
