@@ -58,6 +58,24 @@ const DECISIONS: Record<RunAgentInput["scenario"], { outcome: "confirmed" | "not
   no_response: null,
 };
 
+/**
+ * A fixed stand-in for the model's judgement once evidence has arrived (from the WhatsApp interview or a phone call). It reads what the
+ * participant said and proposes the matching outcome with a plain confidence. The platform's own policy then decides whether that
+ * completes the case or goes to a person (a conflict with the programme record, or confidence below the threshold).
+ */
+export function scriptedJudgement(evidence: { question_id: string; value: string }[]): { outcome: "confirmed" | "not_confirmed" | "inconclusive"; state: "same_job" | "changed_job" | "not_employed" | "education_training" | "unreachable_unclear"; confidence: number; why: string } | null {
+  const latest = (key: string) => evidence.filter(e => e.question_id === key && e.value && e.value !== "[erased]").at(-1)?.value;
+  const status = latest("work_status");
+  if (!status) return null;
+  switch (status) {
+    case "same_job": return { outcome: "confirmed", state: "same_job", confidence: latest("employer_name") ? 0.92 : 0.8, why: latest("employer_name") ? "The participant says they still work at the same place and named the employer." : "The participant says they still work at the same place but did not name the employer." };
+    case "changed_job": return { outcome: "confirmed", state: "changed_job", confidence: 0.7, why: "The participant reports a new employer, which is not on the programme record, so a person should check." };
+    case "not_employed": return { outcome: "not_confirmed", state: "not_employed", confidence: 0.9, why: "The participant reports not working at present, so retention is not confirmed." };
+    case "education_training": return { outcome: "inconclusive", state: "education_training", confidence: 0.9, why: "The participant is studying or training, so there is no job to confirm." };
+    default: return null;
+  }
+}
+
 export class ScriptedAgentRuntime implements AgentRuntimePort {
   constructor(private tools: GatewayTools, private channels: FakeChannels = new FakeChannels(), private employeeVersion = "1.0.0") {}
 
@@ -106,6 +124,32 @@ export class ScriptedAgentRuntime implements AgentRuntimePort {
     r = await call("decision_propose", { case_id: caseId, idempotency_key: key(), expected_version: r.case_version, proposed_outcome: plan.outcome, livelihood_state: plan.state, confidence: plan.confidence, evidence_refs: refs, rationale: plan.why });
     const state = (r.data as { state?: string } | undefined)?.state;
     return this.finish(svc, session, "idle", state === "complete" ? "Auto-completed by policy." : "Handed to a human reviewer.");
+  }
+
+  /** Woken after an interview or a phone call has produced evidence: read it, propose the matching outcome, and go back to sleep. */
+  async resumeCase(svc: CaseService, tenant: string, caseId: string): Promise<AgentSession> {
+    const mission = await svc.getMission(tenant, (await svc.getCase(tenant, caseId)).mission_version);
+    const employee = await svc.employeeFor(mission);
+    const ctx: ToolSession = { session_id: newId("sesn"), tenant_id: tenant, case_id: caseId, mission_version: mission.version, employee_version: employee.version, allowed_tools: employee.allowed_tools };
+    const session: AgentSession = { session_id: ctx.session_id, tenant_id: tenant, case_id: caseId, employee_version: employee.version, mission_version: ctx.mission_version, status: "running", tokens_in: 0, tokens_out: 0, cost_usd: 0, budget_usd: 0.5, simulated: true, trace: [], started_at: svc.now().toISOString(), trigger: "resume" };
+    const step = (label: string, type: string, detail: string, extra: Partial<TraceStep> = {}) => {
+      session.trace.push({ label, type, detail, ts: svc.now().toISOString(), ...extra });
+      session.tokens_in += 700; session.tokens_out += 220;
+      session.cost_usd = Math.round((session.tokens_in * 3 + session.tokens_out * 15) / 10_000) / 100;
+    };
+    await svc.store.putSession(session);
+    step("Session created", "session.created", "Woken after evidence arrived");
+    await svc.emit({ tenant_id: tenant, case_id: caseId }, "agent_session_started", `agent:${ctx.session_id}`, "Agent session started", { session_id: ctx.session_id, simulated: true });
+    const r = await this.tools.call(ctx, "case_get_context", { case_id: caseId });
+    step("case_get_context", "MCP tool", r.error ? `${r.error.code}: ${r.error.message}` : "ok", { tool: "case_get_context", input: { case_id: caseId }, result: r.error ?? r.data, outcome: r.error ? "refused" : "executed", case_version: r.case_version });
+    const evidence = ((r.data as { evidence?: { evidence_ref: string; question_id: string; value: string }[] } | undefined)?.evidence ?? []);
+    const plan = scriptedJudgement(evidence);
+    if (r.error || !plan) return this.finish(svc, session, "idle", "Nothing to judge yet.");
+    const input = { case_id: caseId, idempotency_key: `${ctx.session_id}-resume`, expected_version: r.case_version, proposed_outcome: plan.outcome, livelihood_state: plan.state, confidence: plan.confidence, evidence_refs: evidence.map(e => e.evidence_ref), rationale: plan.why };
+    const d = await this.tools.call(ctx, "decision_propose", input);
+    step("decision_propose", "MCP tool", d.error ? `${d.error.code}: ${d.error.message}` : "ok", { tool: "decision_propose", input, result: d.error ?? d.data, outcome: d.error ? "refused" : "executed", case_version: d.case_version });
+    const state = (d.data as { state?: string } | undefined)?.state;
+    return this.finish(svc, session, "idle", d.error ? d.error.message : state === "complete" ? "Auto-completed by policy." : "Handed to a human reviewer.");
   }
 
   private async finish(svc: CaseService, session: AgentSession, status: AgentSession["status"], detail: string): Promise<AgentSession> {

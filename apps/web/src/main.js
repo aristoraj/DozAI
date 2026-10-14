@@ -4,7 +4,7 @@ import { initNumbers } from "./number.js";
 import { initFiles } from "./file.js";
 import { createQuestionEditor } from "./questions.js";
 import { createBusy, loadingLine, loadingState } from "./busy.js";
-import { ALL, OUTCOMES, casesFor, dashboardFor, donutGradient, paintDashboard } from "./dashboard.js";
+import { ALL, OUTCOMES, casesFor, dashboardFor, donutGradient, legendHtml, paintDashboard } from "./dashboard.js";
 const API_BASE = (window.DOZAI_API_BASE || "/api").replace(/[/]$/, "");
 const CLOUD = API_BASE.startsWith("/server");
 const TZ = "Asia/Kolkata"; // all times are shown in India Standard Time
@@ -38,6 +38,8 @@ const plural = (n, one, many = one + "s") => `${n} ${n === 1 ? one : many}`;
 const can = cap => (ALLOWED[cap] || []).includes(state.me?.role);
 const STATUS_LABEL = { review: "Needs review", confirmed: "Confirmed", progress: "In progress", "not-confirmed": "Not confirmed", inconclusive: "Inconclusive", "not-started": "Not started", "opted-out": "Opted out" };
 const statusPill = s => `<span class="status ${s}">${esc(STATUS_LABEL[s] || s)}</span>`;
+// A case's status in plain words (where it is in the process), coloured by how it stands. The result, what was found out, is a separate column.
+const casePill = c => `<span class="status ${c.status}">${esc(c.status_label || STATUS_LABEL[c.status] || c.status)}</span>`;
 const istTime = ts => (ts ? new Date(ts).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: TZ }) : "");
 const istDay = ts => {
   if (!ts) return "";
@@ -170,7 +172,9 @@ function overviewModel() {
     foots: { total: "loaded", reached: `${s.reached} of ${s.total}`, confirmed: `${s.complete} completed`, review: s.review ? "waiting for review" : "all clear", reviewTone: !!s.review },
     stages: { total: s.total, reached: s.reached, responded: s.responded, complete: s.complete, confirmed: s.confirmed },
     stagePct: { total: pct(s.total), reached: pct(s.reached), responded: pct(s.responded), complete: pct(s.complete), confirmed: pct(s.confirmed) },
-    mix: s.mix, mixTotal: Object.values(s.mix).reduce((a, b) => a + b, 0),
+    mix: s.mix, mixTotal: Object.values(s.mix).reduce((a, b) => a + b, 0), slots: d.slots,
+    // What "confirmed" means for this mission, as the mission words it ("Feedback collected"), or the plain word.
+    confirmedLabel: picked?.verdict_labels?.confirmed ?? "Confirmed",
     attentionHtml: items.length ? items.map(([i, t, sub, go]) => `<button class="attention-item" style="border:0;width:100%;text-align:left;cursor:pointer" data-go="${go}"><span class="attention-icon">${i}</span><span><strong>${esc(t)}</strong><small>${esc(sub)}</small></span><span>›</span></button>`).join("") : `<p class="muted t-sm">Nothing needs attention.</p>`,
     activityHtml: d.activity.slice(0, 5).map(timelineEvent).join("") || `<p class="muted t-sm">${key === ALL ? "No activity yet." : "No recent activity for this mission."}</p>`,
     caption: `Showing ${plural(s.total, "participant")} for ${picked ? picked.name : "all missions"}.`,
@@ -204,22 +208,22 @@ function renderOverview() {
   if (md.empty) {
     return `${head}${bar}${live}${empty(md.key === ALL ? "No participants yet" : "No participants in this mission yet", can("intake") ? "Load your first cohort to start. Participant contact numbers are encrypted when stored." : "Ask an administrator or operator to load participants.", can("intake") ? `<button class="button primary" data-action="import">Add participants</button>` : "")}`;
   }
-  const { kpis, foots, stages, stagePct, mix, mixTotal } = md;
+  const { kpis, foots, stages, stagePct, mix, mixTotal, slots, confirmedLabel } = md;
   const stage = (key, label) => `<div class="stage-row" data-stage="${key}"><strong>${label}</strong><div class="progress-track"><div class="progress-fill" style="width:${stagePct[key]}%"></div></div><span data-stage-count data-shown="${stages[key]}">${stages[key]}</span></div>`;
-  const values = OUTCOMES.map(([k]) => mix[k]);
+  const values = slots.map(([k]) => mix[k]);
   return `${head}${bar}${live}<div data-overview>
     <div class="grid kpis">
       ${kpi("Participants", "total", kpis.total, kpis.total, foots.total, "#e4f5f3")}
       ${kpi("Contacted", "reached", `${kpis.reached}%`, kpis.reached, foots.reached, "#fae8dc")}
-      ${kpi("Outcomes confirmed", "confirmed", kpis.confirmed, kpis.confirmed, foots.confirmed, "#e4f5f3")}
+      ${kpi(confirmedLabel === "Confirmed" ? "Outcomes confirmed" : confirmedLabel, "confirmed", kpis.confirmed, kpis.confirmed, foots.confirmed, "#e4f5f3")}
       ${kpi("Needs a person", "review", kpis.review, kpis.review, foots.review, "#fff1d9", foots.reviewTone ? "amber" : "")}
     </div>
     <div class="grid two">
       <section class="card card-pad"><div class="card-head"><div><h2>Progress</h2><p>How far participants have moved</p></div><button class="text-button" data-go="cases">Open cases →</button></div>
-        <div class="stage-list">${stage("total", "Loaded")}${stage("reached", "Contacted")}${stage("responded", "Responded")}${stage("complete", "Completed")}${stage("confirmed", "Confirmed")}</div></section>
+        <div class="stage-list">${stage("total", "Loaded")}${stage("reached", "Contacted")}${stage("responded", "Responded")}${stage("complete", "Completed")}${stage("confirmed", esc(confirmedLabel))}</div></section>
       <section class="card card-pad"><div class="card-head"><div><h2>Outcomes</h2><p>Where participants are now</p></div></div>
-        <div class="donut-wrap"><div class="donut-holder"><div class="donut" data-donut data-values="${JSON.stringify(values)}" style="background:${donutGradient(values)}"></div><div class="donut-centre"><strong data-donut-centre>${mixTotal}</strong><small>classified</small></div></div>
-        <div class="legend">${OUTCOMES.map(([k, l, c]) => `<div class="legend-item"><span class="legend-dot" style="background:${c}"></span><span>${l}</span><strong data-mix="${k}">${mix[k]}</strong></div>`).join("")}</div></div></section>
+        <div class="donut-wrap"><div class="donut-holder"><div class="donut" data-donut data-values="${JSON.stringify(values)}" style="background:${donutGradient(values, slots)}"></div><div class="donut-centre"><strong data-donut-centre>${mixTotal}</strong><small>classified</small></div></div>
+        <div class="legend">${legendHtml(slots, mix)}</div></div></section>
     </div>
     <div class="grid two-even" style="margin-top:16px">
       <section class="card card-pad"><div class="card-head"><div><h2>Needs attention</h2><p>Only what needs a decision or a setting</p></div></div>
@@ -258,10 +262,10 @@ function renderCases() {
       <span class="t-xs muted">${list.length} of ${state.cases.length}</span></div>
       ${state.cases.length === 0 ? empty("No cases yet", can("intake") ? "Add participants to create their cases." : "No participants have been loaded.", can("intake") ? `<button class="button primary" data-action="import">Add participants</button>` : "")
         : list.length === 0 ? empty("No cases match", "Change the search or the status filter.")
-        : `<div style="overflow-x:auto"><table class="data-table"><thead><tr><th>Participant</th><th>Status</th><th>Outcome</th><th>Confidence</th><th>Last activity</th><th></th></tr></thead><tbody>${list.map(caseRow).join("")}</tbody></table></div>`}
+        : `<div style="overflow-x:auto"><table class="data-table"><thead><tr><th>Participant</th><th>Status</th><th>Result</th><th>Confidence</th><th>Last activity</th><th></th></tr></thead><tbody>${list.map(caseRow).join("")}</tbody></table></div>`}
     </section>`;
 }
-const caseRow = c => `<tr data-case="${esc(c.id)}" style="cursor:pointer"><td><div class="participant-cell"><span class="mini-avatar" style="background:${colorFor(c.id)}">${esc(initials(c.name))}</span><span><strong>${esc(c.name)}</strong><small>${esc(c.id)} · ${esc(c.location)}</small></span></div></td><td>${statusPill(c.status)}</td><td><strong class="t-sm">${esc(c.outcome)}</strong><div class="muted t-xs" style="margin-top:3px">${esc(c.stage)}</div></td><td><div class="confidence"><div class="confidence-bar"><span style="width:${c.confidence}%"></span></div><span>${c.confidence}%</span></div></td><td style="color:var(--muted)">${esc(c.lastTouch)}</td><td><button class="row-action" data-case="${esc(c.id)}" aria-label="Open ${esc(c.name)}">›</button></td></tr>`;
+const caseRow = c => `<tr data-case="${esc(c.id)}" style="cursor:pointer"><td><div class="participant-cell"><span class="mini-avatar" style="background:${colorFor(c.id)}">${esc(initials(c.name))}</span><span><strong>${esc(c.name)}</strong><small>${esc(c.id)} · ${esc(c.location)}</small></span></div></td><td>${casePill(c)}</td><td><strong class="t-sm">${esc(c.outcome)}</strong>${c.outcome_note ? `<div class="muted t-xs" style="margin-top:3px">${esc(c.outcome_note)}</div>` : ""}</td><td><div class="confidence"><div class="confidence-bar"><span style="width:${c.confidence}%"></span></div><span>${c.confidence}%</span></div></td><td style="color:var(--muted)">${esc(c.lastTouch)}</td><td><button class="row-action" data-case="${esc(c.id)}" aria-label="Open ${esc(c.name)}">›</button></td></tr>`;
 
 // ---- campaigns -------------------------------------------------------------------------------------------------------------------------------
 const CAMP_STATUS = { draft: ["not-started", "Draft"], running: ["progress", "Running"], paused: ["review", "Paused"], completed: ["confirmed", "Finished"], stopped: ["not-confirmed", "Stopped"] };
@@ -426,7 +430,7 @@ async function openCase(id) {
   const panel = (key, html) => `<div class="drawer-panel" role="tabpanel" id="panel-${key}" data-panel="${key}" aria-labelledby="tab-${key}" ${key === tab ? "" : "hidden"}>${html}</div>`;
   const kv = (label, value) => `<div class="kv-row"><dt>${label}</dt><dd>${esc(value)}</dd></div>`;
   caseDrawer.innerHTML = `<div class="drawer-head"><span class="mini-avatar drawer-avatar" style="background:${colorFor(c.id)}">${esc(initials(c.name))}</span><div class="drawer-title"><div class="eyebrow">Participant case</div><h2>${esc(c.name)}</h2><p>${esc(c.id)} · ${esc(c.cohort)} · ${esc(c.location)}</p><div class="drawer-status">${statusPill(c.status)}</div></div><button class="close-button" id="closeDrawer" aria-label="Close case">×</button></div><div class="drawer-body">
-    <div class="case-summary"><div class="summary-box"><small>Status</small><strong>${esc(STATUS_LABEL[c.status])}</strong></div><div class="summary-box"><small>Outcome</small><strong>${esc(c.outcome)}</strong></div><div class="summary-box"><small>Confidence</small><strong>${c.confidence}%</strong><span class="summary-bar"><span style="width:${Math.max(0, Math.min(100, c.confidence))}%"></span></span></div></div>
+    <div class="case-summary"><div class="summary-box"><small>Status</small><strong>${esc(c.status_label || STATUS_LABEL[c.status])}</strong></div><div class="summary-box"><small>Result</small><strong>${esc(c.outcome)}</strong>${c.outcome_note ? `<span class="muted t-xs">${esc(c.outcome_note)}</span>` : ""}</div><div class="summary-box"><small>Confidence</small><strong>${c.confidence}%</strong><span class="summary-bar"><span style="width:${Math.max(0, Math.min(100, c.confidence))}%"></span></span></div></div>
     <div class="next-action"><small>Next permitted action</small><h3>${esc(c.stage === "Complete" ? "Case is complete" : c.stage === "Review" ? "A person must decide" : c.stage === "Not started" ? "Ready to start" : "Waiting")}</h3><p>${esc(c.next)}</p>
       ${canRun && simulated ? `<div class="sim-row"><label for="scenarioSelect">Simulated participant reply (WhatsApp is off)</label><select id="scenarioSelect" class="filter-select"><option value="same_job">Same job</option><option value="changed_job">Changed job</option><option value="employer_conflict">Employer name conflict</option><option value="not_employed">Not employed</option><option value="opt_out">Opts out</option><option value="no_response">No response</option></select></div>` : ""}
       ${canRun && !simulated ? `<p class="t-xs muted" style="margin:10px 0 8px">WhatsApp is live. The agent sends the approved message to this participant and waits for a real reply.</p>` : ""}
@@ -1038,6 +1042,7 @@ function openStudioModal() {
         ${r.problems.length && !d ? `<div class="agent-callout" style="border-color:#b64b48"><small>Problems</small><h3>${esc(r.problems[0])}</h3>${r.problems.length > 1 ? `<p>${r.problems.slice(1, 6).map(esc).join("<br>")}</p>` : ""}</div>` : ""}
         ${r.notes.length ? `<div class="agent-callout"><small>Assumptions to check</small><p>${r.notes.map(esc).join("<br>")}</p></div>` : ""}
         ${d ? `<h3 class="t-md" style="margin:14px 0 4px">Goal</h3><p class="t-md" style="margin:0">${esc(d.objective)}</p>
+          <h3 class="t-md" style="margin:14px 0 4px">Results it can end with</h3>${resultsHtml(d.outcomes, d.verdict_labels)}
           ${d.strategy ? `<h3 class="t-md" style="margin:14px 0 4px">Approach</h3><p class="t-sm" style="margin:0">Channels in order: ${d.strategy.channels.map(c => (c === "voice" ? "phone call" : "WhatsApp")).join(", then ")}. Follow up after about ${esc(d.strategy.follow_up_after_hours)} hours of silence.${d.agent_guidance ? " " + esc(d.agent_guidance) : ""}</p>` : ""}
           <h3 class="t-md" style="margin:18px 0 4px">Questions</h3>
           <p class="t-sm" style="margin:0 0 10px">Read each question as it will be asked on WhatsApp and on a phone call. Edit, remove or add anything you need. Nothing is saved until you save the mission.</p>
@@ -1077,6 +1082,16 @@ function openStudioModal() {
 }
 
 // The evidence a mission needs: the checklist the employee works through for every person.
+// What a mission can conclude about a person, in its own words: the findings, and what the three general results mean here.
+function resultsHtml(outcomes, verdictLabels) {
+  const found = (outcomes || []).map(o => `<div class="check-item"><span class="check-mark">·</span><span><strong>${esc(o.label)}</strong><small>${esc(o.description || "")}</small></span></div>`).join("");
+  const v = verdictLabels || {};
+  const means = `Confirmed: ${esc(v.confirmed || "confirmed")}. Not confirmed: ${esc(v.not_confirmed || "not confirmed")}. Inconclusive: ${esc(v.inconclusive || "inconclusive")}.`;
+  return `<div class="check-list">${found || '<p class="muted t-sm">This mission does not list its own findings, so the original job findings apply.</p>'}</div><p class="muted t-sm" style="margin:8px 0 0">${means}</p>`;
+}
+function resultsCard(m) {
+  return `<section class="card card-pad" style="margin-top:16px"><div class="card-head"><div><h2>Results this mission can end with</h2><p>What the employee can conclude about each person. The cases list shows these, in these words</p></div><span class="status active">${(m.outcomes || []).length}</span></div>${resultsHtml(m.outcomes, m.verdict_labels)}</section>`;
+}
 function needsCard(m) {
   const rs = m.requirements || [];
   const label = k => rs.find(r => r.key === k)?.label || k;
@@ -1128,6 +1143,7 @@ function renderMission() {
     ${detail}
     ${wordingCard(m)}
     ${needsCard(m)}
+    ${resultsCard(m)}
     ${voiceCard(m)}
     <div class="grid two" style="margin-top:16px">
       <section class="card card-pad"><div class="card-head"><div><h2>Questionnaire</h2><p>Modules and how many questions each holds</p></div></div>
@@ -1367,8 +1383,8 @@ function action(name) {
   if (name === "resume-platform") confirmModal({ title: "Switch back on?", text: "Queued messages and calls go out on the next scheduler pass, and timers that came due are acted on. Check the queue first if something wrong was going out.", button: "Switch back on", busy: "Switching on…", onConfirm: () => saveControls({ paused: false }, "Back on.") });
   if (name === "save-limits") saveControls({ daily_budget_usd: Number($("limDaily").value), case_budget_usd: Number($("limCase").value), max_wakes_per_case: Number($("limWakes").value) }, "Limits saved.");
   if (name === "export-cases") {
-    const rows = filteredCases().map(c => [c.id, c.cohort, c.location, STATUS_LABEL[c.status], c.outcome, c.confidence, c.attempts, c.lastTouch]);
-    download(`dozai-cases-${new Date().toISOString().slice(0, 10)}.csv`, toCsv(["case", "cohort", "location", "status", "outcome", "confidence", "attempts", "last activity"], rows));
+    const rows = filteredCases().map(c => [c.id, c.cohort, c.location, c.status_label || STATUS_LABEL[c.status], c.outcome, c.confidence, c.attempts, c.lastTouch]);
+    download(`dozai-cases-${new Date().toISOString().slice(0, 10)}.csv`, toCsv(["case", "cohort", "location", "status", "result", "confidence", "attempts", "last activity"], rows));
     toast("Exported without names or phone numbers.", "success");
   }
   if (name === "export-audit") {

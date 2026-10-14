@@ -32,6 +32,7 @@ export function assembleMission(brief: MissionBrief, d: MissionDraft, base: Miss
     mission_id: ids.mission_id, version: ids.version, name: brief.name, programme_name: brief.programme_name,
     employee_id: base.employee_id, employee_version: base.employee_version,
     objective: d.objective, evidence_requirements: d.evidence_requirements, strategy: d.strategy, agent_guidance: d.agent_guidance,
+    ...(d.outcomes?.length ? { outcomes: d.outcomes } : {}), ...(d.verdict_labels ? { verdict_labels: d.verdict_labels } : {}),
     intro_template: base.intro_template, templates: base.templates.map(t => ({ key: t.key, language: t.language, purpose: t.purpose, provider_name: t.provider_name, body_fields: t.body_fields })),
     ...(Object.keys(policy).length ? { policy } : {}),
     instrument: {
@@ -103,6 +104,8 @@ export class ScriptedMissionDrafter implements MissionDrafter {
       objective: brief.goal.slice(0, 400),
       agent_guidance: brief.approach?.slice(0, 2000),
       strategy: { channels: ["whatsapp", "voice"], follow_up_after_hours: 48 },
+      outcomes: [{ key: "answered", label: "Answered", description: "The person answered what we asked." }, { key: "unclear", label: "Unclear", description: "The answers do not settle it." }],
+      verdict_labels: { confirmed: "Answers collected", not_confirmed: "Not answered", inconclusive: "Unclear" },
       evidence_requirements: rows.map(r => ({ key: r.key, label: r.label, required: true, min_confidence: 0.6 })),
       questions: rows.map(r => ({ id: `q_${r.key}`.slice(0, 40), module: categoryFor(r.label), type: "text" as const, evidence_key: r.key, text: `${r.label}?` })),
       start_message: "Thank you. We will now ask a few short questions. You can reply STOP at any time.",

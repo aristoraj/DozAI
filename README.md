@@ -15,6 +15,14 @@ npm run build:cloud   # bundles functions/core_api and appsail/mcp-gateway for C
 
 Everything runs on **synthetic data** (12 sample cases). Do not load real participant data in development.
 
+**What works locally, with nothing reaching a real person:** the whole app on an in-memory store (restarting the API resets it). WhatsApp is simulated: open a case and type a participant reply, or pick a scenario. Phone calls go to a simulator: publish the phone form on the Mission page, press **Request a phone call** on a case, approve it on the Approvals page, then use the case page's simulator buttons to finish the call as a person who answered, did not answer, refused, or was the wrong person. Create a mission, sign off its wording, use the Controls tab and the kill switch, and delete an unused mission, all against the local store.
+
+**The agent:** by default a script, so no key and no cost. To try the real agent and Mission Studio drafting, start the API with `USE_CLAUDE=1 npm run dev:api` (or put `USE_CLAUDE=1` in `.env.dev-local`). It reads `ANTHROPIC_API_KEY` from `.env.local` and costs a few cents a run. It still never messages or calls anyone.
+
+**Real WhatsApp from your computer** (receiving real replies through ngrok) is covered step by step in [docs/LOCAL_SETUP.md](docs/LOCAL_SETUP.md). In short: keys go in `.env.local` (deploy also reads it), local-only settings go in `.env.dev-local` (deploy never reads it), and the one switch that turns real sending on, `DOZAI_LOCAL_WHATSAPP=1`, is read only from `.env.dev-local`. Real WhatsApp starts with no made-up cohort, and Interakt's webhook is account-wide, so read the warning there first.
+
+**Before every push:** `npm run typecheck && npm test`. What cannot be tested locally is the real WhatsApp provider, the real ZoLabs calls, the Catalyst database and the cron schedule: check those on DozAI-Dev after a deploy.
+
 ## Layout
 
 | Path | What it is |

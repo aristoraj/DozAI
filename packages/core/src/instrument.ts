@@ -13,6 +13,8 @@ export interface Question {
   text: string;
   /** How to say it on a phone call, when the written wording does not work aloud. */
   spoken?: string;
+  /** An open question that invites an extra comment ("Is there anything else you would like to tell us?"): "no" or "nothing" is a good answer. */
+  optional?: boolean;
   options?: QuestionOption[];
   /** Stored as evidence under this key (the policy engine looks for e.g. "employer_name"). */
   evidence_key: string;
@@ -47,6 +49,15 @@ export const YESNO: QuestionOption[] = [
 ];
 
 export const optionsOf = (q: Question): QuestionOption[] => (q.type === "yesno" ? YESNO : q.options ?? []);
+
+/** What is saved when someone says there is nothing to add to an open question. */
+export const NOTHING_TO_ADD = "Nothing to add";
+const OPEN_ENDED = /\b(anything|something) else\b|\bany (other|further|more|additional) (comments?|feedback|thoughts?|suggestions?|things?)\b|\bany (comments?|feedback|suggestions?)\b|\bwould you like to (add|tell|share|say)\b|\bis there anything\b/i;
+/**
+ * A free-text question that invites an extra comment. For it, "no" and "nothing" are real answers, where for any other text question
+ * (a name, a job title) they are not. A mission can say so with `optional`; questions written before that existed are recognised by their words.
+ */
+export const isOptionalText = (q: Question): boolean => q.type === "text" && (q.optional === true || OPEN_ENDED.test(q.text));
 
 export const DRAFT_INSTRUMENT: Instrument = {
   version: "DRAFT-0.1",

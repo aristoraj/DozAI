@@ -297,7 +297,7 @@ describe("phone calls over the API", () => {
     const done = await call("POST", `/cases/${id}/simulate-call`, { outcome: "answered", answers: { work_status: "I work at the same place as before", employer_name: "Acme", role_title: "Packer" } });
     expect(done.status).toBe(200);
     expect(done.json.applied).toBe(1);
-    expect((await svc.getCase(DEMO_TENANT, id)).status).toBe("evaluating");
+    expect((await svc.getCase(DEMO_TENANT, id)).status).toBe("complete"); // the agent was woken, judged the answers (employer matches the record) and the policy completed it
     const detail = (await call("GET", `/cases/${id}`)).json;
     expect(detail.requirements).toMatchObject({ gaps: [], collected: 3 });
     expect(detail.evidence.map((e: { source: string }) => e.source)).toEqual(["voice", "voice", "voice"]);
@@ -980,5 +980,119 @@ describe("editing the questions before sign-off", () => {
     expect(r.json.mission.name).toBe(def.name);
     expect(r.json.mission.signed_off.by).toBe("admin:dev-user");
     expect(r.json.mission.signed_off.at).not.toBe("2020-01-01T00:00:00.000Z");
+  });
+});
+
+describe("a whole WhatsApp interview on a local setup (simulated replies, scripted agent)", () => {
+  async function started() {
+    const t = start();
+    const id = (await t.call("POST", "/participants/import", { rows: [row], consent_attested: true })).json.created[0].case_id as string;
+    await t.call("POST", `/cases/${id}/run-agent`, { scenario: "no_response" }); // sends the first message and waits
+    const reply = async (text: string) => (await t.call("POST", `/cases/${id}/simulate-reply`, { text })).json;
+    return { ...t, id, reply };
+  }
+
+  it("asks the questions, and when the last is answered the agent judges the answers and the case is completed", async () => {
+    const { reply, call, id } = await started();
+    expect((await reply("yes")).result.action).toBe("started");
+    expect((await reply("1")).result.action).toBe("answered");            // I work at the same place
+    expect((await reply("Acme")).result.action).toBe("answered");         // the employer on the programme record
+    expect((await reply("Packer")).result.action).toBe("answered");
+    const last = await reply("1");                                         // yes to job support
+    expect(last.result).toMatchObject({ action: "finished", finished: true });
+    expect(last.session).toMatchObject({ status: "idle", simulated: true });  // the agent was woken
+    expect(last.case).toMatchObject({ status: "confirmed", outcome: "Same job" });
+    const d = (await call("GET", `/cases/${id}`)).json;
+    expect(d.decisions.at(-1)).toMatchObject({ proposed_outcome: "confirmed", livelihood_state: "same_job" });
+  });
+
+  it("sends a different employer to a person, because it does not match the programme record", async () => {
+    const { reply } = await started();
+    await reply("yes"); await reply("1"); await reply("Some Other Company"); await reply("Packer");
+    const last = await reply("2");
+    expect(last.case.status).toBe("review");
+  });
+
+  it("someone not working is not confirmed, and someone who stops is left alone", async () => {
+    const a = await started();
+    await a.reply("yes"); await a.reply("3"); await a.reply("1"); await a.reply("1"); // not working, the reason, looking for work
+    const done = await a.reply("2");                                                // and no to job support
+    expect(done.case).toMatchObject({ status: "not-confirmed" });
+    const b = await started();
+    await b.reply("yes");
+    const stopped = await b.reply("stop");
+    expect(stopped.result.action).toBe("stopped");
+    expect(stopped.case.status).toBe("opted-out");
+  });
+});
+
+describe("the cases list: status says where a case is, the result says what was found out, in the mission's words", () => {
+  const brief = { name: "Experience check", programme_name: "Project X", goal: "Find out how the experience was for people who used the service.", people: "People who used the service last month.", find_out: "How smooth the experience was\nWhether they would recommend it" };
+
+  async function feedbackWorld() {
+    const t = start();
+    const draft = (await t.call("POST", "/missions/draft", brief, "admin")).json.definition;
+    await t.call("POST", "/missions", draft, "admin");
+    const key = draft.evidence_requirements[0].key as string;
+    const make = async (name: string) => {
+      const r = await t.call("POST", "/participants/import", { rows: [{ ...row, name, phone: `98765${String(Math.floor(Math.random() * 90000) + 10000)}` }], consent_attested: true, mission_version: draft.version });
+      const id = r.json.created[0].case_id as string;
+      await t.svc.beginSession(DEMO_TENANT, id, "t");
+      return id;
+    };
+    const finish = async (id: string, finding: string | null) => {
+      await t.svc.recordInbound(DEMO_TENANT, id, { provider_event_id: `e-${id}`, channel: "whatsapp", summary: "answered", answers: [{ question_id: key, value: "very smooth", confidence: 0.95 }] });
+      const refs = (await t.svc.store.listEvidence(id)).map(e => e.evidence_id);
+      return t.svc.proposeDecision(DEMO_TENANT, id, (await t.svc.getCase(DEMO_TENANT, id)).version, { proposed_outcome: "confirmed", livelihood_state: finding, confidence: 0.95, evidence_refs: refs, rationale: "Clear." }, "agent:test");
+    };
+    const row_ = async (id: string) => (await t.call("GET", "/cases")).json.cases.find((c: { id: string }) => c.id === id);
+    return { ...t, draft, make, finish, row_ };
+  }
+
+  it("a finished feedback case shows its finding as the result and the verdict under it, not job words or 'Awaiting response'", async () => {
+    const w = await feedbackWorld();
+    const id = await w.make("Asha Test");
+    await w.finish(id, "answered");
+    expect(await w.row_(id)).toMatchObject({ status: "confirmed", status_label: "Complete", outcome: "Answered", outcome_note: "Answers collected", result: { finding: "answered", verdict: "confirmed" } });
+  });
+
+  it("a finished case with no finding shows the mission's word for the verdict: this is the case that used to say 'Awaiting response'", async () => {
+    const w = await feedbackWorld();
+    const id = await w.make("Ravi Test");
+    await w.finish(id, null);
+    const r = await w.row_(id);
+    expect(r).toMatchObject({ status: "confirmed", status_label: "Complete", outcome: "Answers collected", outcome_note: null });
+    expect(JSON.stringify(r)).not.toContain("Awaiting response");
+  });
+
+  it("a case still in progress shows plain status and no guessed result", async () => {
+    const w = await feedbackWorld();
+    const id = await w.make("Neha Test");
+    const c = await w.svc.getCase(DEMO_TENANT, id);
+    await w.svc.transition(DEMO_TENANT, id, c.version, "waiting", { actor: "t", summary: "Waiting", patch: { attempts: 1 } });
+    expect(await w.row_(id)).toMatchObject({ status: "progress", status_label: "Waiting for a reply", outcome: "—", outcome_note: "Not known yet" });
+    const fresh = (await w.call("POST", "/participants/import", { rows: [{ ...row, name: "Fresh Test", phone: "9812345678" }], consent_attested: true })).json.created[0].case_id as string;
+    expect(await w.row_(fresh)).toMatchObject({ status: "not-started", status_label: "Not started", outcome: "—", outcome_note: null });
+  });
+
+  it("the placement mission keeps its job words, and a finding from another mission is refused for it", async () => {
+    const t = start();
+    const id = (await t.call("POST", "/participants/import", { rows: [row], consent_attested: true })).json.created[0].case_id as string;
+    await t.svc.beginSession(DEMO_TENANT, id, "t");
+    await t.svc.recordInbound(DEMO_TENANT, id, { provider_event_id: "e", channel: "whatsapp", summary: "x", answers: [{ question_id: "work_status", value: "same_job", confidence: 0.95 }] });
+    const refs = (await t.svc.store.listEvidence(id)).map(e => e.evidence_id);
+    const v = (await t.svc.getCase(DEMO_TENANT, id)).version;
+    await expect(t.svc.proposeDecision(DEMO_TENANT, id, v, { proposed_outcome: "confirmed", livelihood_state: "satisfied", confidence: 0.95, evidence_refs: refs, rationale: "x" }, "agent:test")).rejects.toMatchObject({ code: "UNKNOWN_FINDING" });
+    await t.svc.proposeDecision(DEMO_TENANT, id, v, { proposed_outcome: "confirmed", livelihood_state: "same_job", confidence: 0.95, evidence_refs: refs, rationale: "x" }, "agent:test");
+    expect((await t.call("GET", "/cases")).json.cases.find((c: { id: string }) => c.id === id)).toMatchObject({ outcome: "Same job", outcome_note: "Confirmed", status_label: "Complete" });
+  });
+
+  it("the mission list carries each mission's findings and result words, for labelling the Command centre", async () => {
+    const w = await feedbackWorld();
+    const ms = (await w.call("GET", "/missions")).json.missions;
+    expect(ms[0].outcomes.map((o: { key: string }) => o.key)).toContain("same_job");
+    const mine = ms.find((m: { version: string }) => m.version === w.draft.version);
+    expect(mine.outcomes.map((o: { key: string }) => o.key)).toEqual(["answered", "unclear"]);
+    expect(mine.verdict_labels).toEqual({ confirmed: "Answers collected", not_confirmed: "Not answered", inconclusive: "Unclear" });
   });
 });

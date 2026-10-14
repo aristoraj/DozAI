@@ -57,7 +57,7 @@ describe("participant import", () => {
     ], { piiKey: KEY, defaultCountryCode: "91" });
     expect(r.created.map(x => x.row)).toEqual([1, 6]);
     expect(r.skipped.map(x => x.row)).toEqual([2, 3, 4, 5]);
-    expect(r.skipped[0]!.reason).toContain("already loaded");
+    expect(r.skipped[0]!.reason).toContain("already in this mission");
   });
 
   it("refuses an oversized batch and never reuses a case id", async () => {

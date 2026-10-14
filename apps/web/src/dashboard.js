@@ -3,8 +3,24 @@
 export const ALL = "all";
 export const MOTION_MS = 550;
 
-/** Same colours and order as the donut legend. */
+/** The donut's slices: [key, label, colour]. Without a mission these are the original placement ones. */
 export const OUTCOMES = [["same_job", "Same job", "#2c7771"], ["changed_job", "Changed job", "#e8967a"], ["not_employed", "Not employed", "#e5aa57"], ["other", "Other or unresolved", "#b8aaa2"]];
+const COLOURS = ["#2c7771", "#e8967a", "#e5aa57"], OTHER = ["other", "Other or unresolved", "#b8aaa2"];
+const VERDICT_SLOTS = Object.assign([["confirmed", "Confirmed", COLOURS[0]], ["not_confirmed", "Not confirmed", COLOURS[1]], ["inconclusive", "Inconclusive", COLOURS[2]], OTHER], { by: "verdict" });
+
+/**
+ * The slices for what is being shown. One mission: its own first three findings and "other". Several missions at once: the general results
+ * (confirmed, not confirmed, inconclusive), because a job finding means nothing for a feedback mission.
+ */
+export function slotsFor(mission, mixedMissions) {
+  if (mixedMissions) return VERDICT_SLOTS;
+  const list = mission?.outcomes;
+  if (!list?.length) return OUTCOMES;
+  return Object.assign([...list.slice(0, 3).map((o, i) => [o.key, o.label, COLOURS[i]]), OTHER], { by: "finding" });
+}
+
+/** The legend under the donut. */
+export const legendHtml = (slots, mix) => slots.map(([k, l, c]) => `<div class="legend-item"><span class="legend-dot" style="background:${c}"></span><span>${l.replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]))}</span><strong data-mix="${k}">${mix[k] ?? 0}</strong></div>`).join("");
 
 // ---- which cases, and what to count ---------------------------------------------------------------------------------------
 
@@ -14,9 +30,13 @@ export const missionOf = (c, missions) => c.mission_version ?? missions[0]?.vers
 export const casesFor = (cases, missions, key) => (key === ALL ? cases : cases.filter(c => missionOf(c, missions) === key));
 
 /** The same counting rules as GET /api/summary (functions/core_api/src/app.ts). A test keeps the two in step. */
-export function summarize(cases) {
+export function summarize(cases, slots = OUTCOMES) {
   const count = f => cases.filter(f).length;
   const done = c => c.workflow_status === "complete";
+  const by = slots.by === "verdict" ? c => c.final_outcome : c => c.livelihood_state;
+  const named = slots.filter(([k]) => k !== "other").map(([k]) => k);
+  const mix = {};
+  for (const [k] of slots) mix[k] = k === "other" ? count(c => done(c) && !named.includes(by(c) ?? "")) : count(c => by(c) === k);
   return {
     total: cases.length,
     review: count(c => c.workflow_status === "review"),
@@ -24,12 +44,7 @@ export function summarize(cases) {
     reached: count(c => c.attempts > 0 || done(c)),
     responded: count(c => c.confidence > 25 || done(c) || c.workflow_status === "review"),
     complete: count(done),
-    mix: {
-      same_job: count(c => c.livelihood_state === "same_job"),
-      changed_job: count(c => c.livelihood_state === "changed_job"),
-      not_employed: count(c => c.livelihood_state === "not_employed"),
-      other: count(c => done(c) && !["same_job", "changed_job", "not_employed"].includes(c.livelihood_state ?? "")),
-    },
+    mix,
   };
 }
 
@@ -38,8 +53,10 @@ export function dashboardFor({ cases, missions, campaigns, audits, key }) {
   const mine = casesFor(cases, missions, key);
   const ids = new Set(mine.map(c => c.id));
   const first = missions[0]?.version;
+  const slots = slotsFor(key === ALL ? (missions.length === 1 ? missions[0] : null) : missions.find(m => m.version === key), key === ALL && missions.length > 1);
   return {
-    summary: summarize(mine),
+    slots,
+    summary: summarize(mine, slots),
     waiting: mine.filter(c => c.status === "progress").length,
     paused: campaigns.filter(c => c.status === "paused" && (key === ALL || (c.mission_version ?? first) === key)),
     activity: key === ALL ? audits : audits.filter(a => ids.has(a.case_id)),
@@ -76,26 +93,32 @@ export function animateNumber(el, to, format = String) {
   el._raf = requestAnimationFrame(step);
 }
 
-export function donutGradient(values) {
+export function donutGradient(values, slots = OUTCOMES) {
   const total = values.reduce((a, b) => a + b, 0);
   if (!total) return "var(--line)";
   let sum = 0;
-  return `conic-gradient(${values.map((n, i) => { const from = (sum / total) * 360; sum += n; return `${OUTCOMES[i][2]} ${from}deg ${(sum / total) * 360}deg`; }).join(",")})`;
+  return `conic-gradient(${values.map((n, i) => { const from = (sum / total) * 360; sum += n; return `${slots[i][2]} ${from}deg ${(sum / total) * 360}deg`; }).join(",")})`;
 }
 
 /** Slides the donut slices to their new sizes, and counts the centre number and the legend with them. */
-export function animateOutcomes(root, mix) {
+export function animateOutcomes(root, mix, slots = OUTCOMES) {
   const donut = root.querySelector("[data-donut]");
   if (!donut) return;
-  const to = OUTCOMES.map(([key]) => mix[key]);
-  const from = donut._values ?? JSON.parse(donut.dataset.values);
+  // A different mission has different slices: redraw the legend, and let the donut grow from nothing.
+  const legend = root.querySelector(".legend");
+  if (legend && [...legend.querySelectorAll("[data-mix]")].map(e => e.dataset.mix).join() !== slots.map(([k]) => k).join()) {
+    legend.innerHTML = legendHtml(slots, mix);
+    donut._values = slots.map(() => 0);
+  }
+  const to = slots.map(([key]) => mix[key]);
+  const from = donut._values?.length === slots.length ? donut._values : (() => { try { const v = JSON.parse(donut.dataset.values); return v.length === slots.length ? v : slots.map(() => 0); } catch { return slots.map(() => 0); } })();
   if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(donut._raf);
   const paint = values => {
     donut._values = values;
     donut.dataset.values = JSON.stringify(values);
-    donut.style.background = donutGradient(values);
+    donut.style.background = donutGradient(values, slots);
     root.querySelector("[data-donut-centre]").textContent = String(Math.round(values.reduce((a, b) => a + b, 0)));
-    OUTCOMES.forEach(([key], i) => { root.querySelector(`[data-mix="${key}"]`).textContent = String(Math.round(values[i])); });
+    slots.forEach(([key], i) => { const el = root.querySelector(`[data-mix="${key}"]`); if (el) el.textContent = String(Math.round(values[i])); });
   };
   if (!canAnimate()) { paint(to); return; }
   let start = null;
@@ -133,7 +156,7 @@ export function paintDashboard(root, m, { after } = {}) {
     animateNumber(row.querySelector("[data-stage-count]"), m.stages[key]);
     row.querySelector(".progress-fill").style.width = `${m.stagePct[key]}%`; // the width eases by CSS
   });
-  animateOutcomes(root, m.mix);
+  animateOutcomes(root, m.mix, m.slots ?? OUTCOMES);
   swapContent(root.querySelector('[data-dash="attention"]'), m.attentionHtml, after);
   swapContent(root.querySelector('[data-dash="activity"]'), m.activityHtml, after);
 }

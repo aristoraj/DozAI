@@ -229,7 +229,7 @@ describe("the live app", () => {
     ta.dispatchEvent(new Event("input", { bubbles: true }));
     click(document.getElementById("saveM"));
     await wait(() => text().includes("Second client check-in"), "new mission shown as the default");
-    expect(document.getElementById("modal")!.innerHTML).toBe(""); // closed
+    await wait(() => document.getElementById("modal")!.innerHTML === "", "the dialog closes"); // closed (it closes just after the page redraws)
 
     // A bad mission explains itself and keeps the form open.
     click(q('[data-action="add-mission"]'));
@@ -278,7 +278,7 @@ describe("the live app", () => {
     expect(text()).toContain("Waiting for reply");
     click(q('.nav-item[data-view="cases"]'));
     await wait(() => text().includes("Kiran Test"), "cases list");
-    expect(state_status("Kiran Test")).toContain("In progress");
+    await wait(() => state_status("Kiran Test").includes("Waiting for a reply"), "Kiran Test waiting for a reply"); // the first message is queued just after the campaign starts
     expect(state_status("Mohan Test")).toContain("Not started"); // not in the campaign
   });
 
@@ -555,6 +555,8 @@ describe("the live app", () => {
     await wait(() => document.getElementById("modal")!.textContent!.includes("Review the questions"), "the draft", 6000);
     const m = document.getElementById("modal")!.textContent!;
     expect(m).toContain("What the employee will find out");
+    expect(m).toContain("Results it can end with");                      // the findings and what the general results mean, so they are read before sign-off
+    expect(m).toContain("Confirmed: Answers collected");
     expect(m).toContain("Whether they still work at the same place");
     expect(m).toContain("Nothing is saved yet");
     expect(document.getElementById("jsonS")).toBeNull();                                      // no JSON editing in the create flow
@@ -874,6 +876,20 @@ describe("the live app", () => {
     click(document.getElementById("cancelS"));
     expect(dialog.classList.contains("modal-sticky")).toBe(false);
     expect(dialog.innerHTML).toBe("");
+  });
+
+  it("the cases list has a plain Status and a separate Result, and the Mission page lists the results the mission can end with", async () => {
+    click(q(".nav-item[data-view=\"cases\"]"));
+    await wait(() => !!q("table.data-table"), "the cases table");
+    const heads = [...document.querySelectorAll("table.data-table thead th")].map(h => h.textContent);
+    expect(heads).toContain("Status");
+    expect(heads).toContain("Result");
+    expect(heads).not.toContain("Outcome");
+    const row = [...document.querySelectorAll("tr[data-case]")][0] as HTMLElement;
+    expect(row.textContent).toMatch(/Not started|Waiting for a reply|In conversation|Checking the answers|Needs a person|Complete/);
+    expect(row.textContent).not.toContain("Awaiting response");
+    click(q(".nav-item[data-view=\"missions\"]"));
+    await wait(() => text().includes("Results this mission can end with"), "the results card");
   });
 });
 

@@ -170,13 +170,15 @@ export function createApp(deps: AppDeps) {
     const { svc } = req.ctx; const t = req.principal!.tenant_id;
     const [people, evidence] = await Promise.all([svc.store.listParticipants(t), svc.store.listAllEvidence()]);
     const byPerson = new Map(people.map(p => [p.participant_id, p]));
-    return cases.map(c => caseView(c, byPerson.get(c.participant_id), evidence.filter(e => e.case_id === c.case_id)));
+    const bundles = new Map<string, MissionBundle>();
+    for (const v of new Set(cases.map(c => c.mission_version))) bundles.set(String(v), await svc.getMission(t, v));
+    return cases.map(c => caseView(c, byPerson.get(c.participant_id), evidence.filter(e => e.case_id === c.case_id), bundles.get(String(c.mission_version))));
   };
   const oneView = async (req: Request, caseId: string) => {
     const { svc } = req.ctx; const t = req.principal!.tenant_id;
     const c = await svc.getCase(t, caseId);
     if (c.deleted_at) throw new DozaiError("CASE_DELETED", "this case was deleted", 410);
-    return caseView(c, await svc.store.getParticipant(t, c.participant_id), await svc.store.listEvidence(caseId));
+    return caseView(c, await svc.store.getParticipant(t, c.participant_id), await svc.store.listEvidence(caseId), await svc.getMission(t, c.mission_version));
   };
 
   // ---- identity and configuration -------------------------------------------------------------------
@@ -194,7 +196,7 @@ export function createApp(deps: AppDeps) {
     return {
       mission_id: b.mission_id, version: b.version, name: b.name, instrument_signed_off: b.instrument_signed_off, signed_off: b.instrument.signed_off ?? null, builtin: !b.created_at,
       created_at: b.created_at ?? null, created_by: b.created_by ?? null, programme_name: b.programme_name ?? null, intro_template: b.intro_template, agent_guidance: b.agent_guidance ?? null,
-      objective: b.objective ?? null, strategy: b.strategy ?? null,
+      objective: b.objective ?? null, strategy: b.strategy ?? null, outcomes: b.outcomes ?? null, verdict_labels: b.verdict_labels ?? null,
       requirements: (b.evidence_requirements ?? []).map(r => ({ key: r.key, label: r.label, hint: r.hint ?? null, required: r.required ?? true, min_confidence: r.min_confidence ?? 0.6, when: r.when ?? null, checked_against: r.verify_against ?? null })),
       modules: b.modules.map(m => ({ key: m.key, title: m.title, branch: m.branch, questions: m.question_ids.length })),
       questions_total: b.modules.reduce((n, m) => n + m.question_ids.length, 0),
@@ -225,7 +227,7 @@ export function createApp(deps: AppDeps) {
   }));
 
   // A mission in the shape the "add a mission" form accepts, so a new version can start from an existing one.
-  const definitionOf = (m: MissionBundle) => ({ mission_id: m.mission_id, version: m.version, name: m.name, programme_name: m.programme_name, intro_template: m.intro_template, templates: m.templates, policy: m.policy_overrides, agent_guidance: m.agent_guidance, employee_id: m.employee_id, employee_version: m.employee_version, objective: m.objective, evidence_requirements: m.evidence_requirements, strategy: m.strategy, instrument: m.instrument });
+  const definitionOf = (m: MissionBundle) => ({ outcomes: m.outcomes, verdict_labels: m.verdict_labels, mission_id: m.mission_id, version: m.version, name: m.name, programme_name: m.programme_name, intro_template: m.intro_template, templates: m.templates, policy: m.policy_overrides, agent_guidance: m.agent_guidance, employee_id: m.employee_id, employee_version: m.employee_version, objective: m.objective, evidence_requirements: m.evidence_requirements, strategy: m.strategy, instrument: m.instrument });
   app.get("/api/missions/:version/definition", need("read"), wrap(async (req, res) => {
     const m = await req.ctx.svc.getMission(req.principal!.tenant_id, String(req.params.version));
     res.json({ definition: definitionOf(m) });

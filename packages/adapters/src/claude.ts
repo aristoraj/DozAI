@@ -43,10 +43,10 @@ const TOOL_HELP: Record<ToolName, string> = {
   mission_get_bundle: "Read the mission modules, approved templates, contact policy and judgement rubric for the pinned version.",
   case_get_timeline: "Read recent ledger events for this case.",
   whatsapp_send_template: "Request an approved WhatsApp template. Checks consent, contact window, attempt cap and opt-out.",
-  callback_schedule: "Set your own wake-up: you are woken after this many hours to look at the case again. Use it instead of waiting indefinitely.",
+  callback_schedule: "Set your own reminder: you are woken after this many hours to look at the case again. It contacts nobody. Not needed right after sending a message, because the platform already sets a follow-up timer; use it only for a different time than that.",
   memory_note: "Remember one fixed fact about this person for later runs. Keys: best_time_to_call (morning, afternoon, evening, weekend), preferred_channel (whatsapp, voice), preferred_language (a two-letter code), prefers_short_contact (yes, no). Nothing else can be stored.",
   voice_call_request: "Request a phone call, now or at a time inside the contact hours, with a short reason. The call asks only for what is still missing. Only available when case_get_context says phone_call_available.",
-  decision_propose: "Propose an outcome with confidence and evidence references. Catalyst decides the final transition.",
+  decision_propose: "Propose a result: proposed_outcome (confirmed, not_confirmed or inconclusive), livelihood_state set to exactly one of the findings listed in your mission brief (or null when the evidence does not settle it), your confidence, and evidence references. The platform rejects a finding the mission does not list, and decides the final transition.",
   review_request: "Create a human review task with a reason code and a short note.",
 };
 

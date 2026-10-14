@@ -3,7 +3,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { ALL, MOTION_MS, OUTCOMES, animateNumber, animateOutcomes, casesFor, dashboardFor, donutGradient, missionOf, paintDashboard, summarize, swapContent } from "./dashboard.js";
+import { ALL, MOTION_MS, OUTCOMES, slotsFor, legendHtml, animateNumber, animateOutcomes, casesFor, dashboardFor, donutGradient, missionOf, paintDashboard, summarize, swapContent } from "./dashboard.js";
 
 type Json = any; // eslint-disable-line @typescript-eslint/no-explicit-any
 
@@ -179,5 +179,61 @@ describe("the filter bar style", () => {
     const rule = css.match(/\.dash-filter \.cs \{([^}]*)\}/)![1]!;
     expect(rule).toMatch(/max-width:\s*\d+px/);
     expect(rule).not.toContain("%");
+  });
+});
+
+describe("the outcomes breakdown follows the mission, not job words", () => {
+  const feedback = { version: "M2", outcomes: [{ key: "satisfied", label: "Satisfied" }, { key: "mixed", label: "Mixed feelings" }, { key: "unhappy", label: "Unhappy" }, { key: "no_view", label: "No view" }] };
+  const keys = (slots: Json) => slots.map(([k]: [string]) => k);
+
+  it("one mission shows its own first three findings and 'other'; a mission with none keeps the original job ones", () => {
+    expect(keys(slotsFor(feedback, false))).toEqual(["satisfied", "mixed", "unhappy", "other"]);
+    expect(slotsFor(feedback, false)[1][1]).toBe("Mixed feelings");
+    expect(slotsFor({ version: "M1" }, false)).toBe(OUTCOMES);
+    expect(slotsFor(undefined, false)).toBe(OUTCOMES);
+  });
+
+  it("several missions together show the general results, because a job finding means nothing for a feedback mission", () => {
+    expect(keys(slotsFor(null, true))).toEqual(["confirmed", "not_confirmed", "inconclusive", "other"]);
+  });
+
+  it("counts each finding, and puts every other finished case under 'other'", () => {
+    const slots = slotsFor(feedback, false);
+    const cs = [caseOf({ livelihood_state: "satisfied", workflow_status: "complete" }), caseOf({ livelihood_state: "satisfied", workflow_status: "complete" }), caseOf({ livelihood_state: "unhappy", workflow_status: "complete" }), caseOf({ livelihood_state: "no_view", workflow_status: "complete" }), caseOf({ workflow_status: "complete" }), caseOf()];
+    expect(summarize(cs, slots).mix).toEqual({ satisfied: 2, mixed: 0, unhappy: 1, other: 2 });   // "no view" is the fourth finding, so it is "other" here; the unfinished case is not counted
+  });
+
+  it("counts the general results when slices are by result", () => {
+    const slots = slotsFor(null, true);
+    const cs = [caseOf({ final_outcome: "confirmed", workflow_status: "complete" }), caseOf({ final_outcome: "not_confirmed", workflow_status: "complete" }), caseOf({ final_outcome: "opted_out", workflow_status: "complete" }), caseOf()];
+    expect(summarize(cs, slots).mix).toEqual({ confirmed: 1, not_confirmed: 1, inconclusive: 0, other: 1 });
+  });
+
+  it("the original job breakdown is unchanged when no slices are given", () => {
+    expect(summarize([caseOf({ livelihood_state: "same_job" })]).mix).toEqual({ same_job: 1, changed_job: 0, not_employed: 0, other: 0 });
+  });
+
+  it("dashboardFor picks the slices from the chosen mission, and uses the general results across missions", () => {
+    const ms = [{ version: "M1" }, feedback];
+    const cs = [caseOf({ mission_version: "M1", livelihood_state: "same_job", workflow_status: "complete", final_outcome: "confirmed" }), caseOf({ mission_version: "M2", livelihood_state: "satisfied", workflow_status: "complete", final_outcome: "confirmed" })];
+    expect(keys(dashboardFor({ cases: cs, missions: ms, campaigns: [], audits: [], key: "M2" }).slots)).toEqual(["satisfied", "mixed", "unhappy", "other"]);
+    expect(dashboardFor({ cases: cs, missions: ms, campaigns: [], audits: [], key: "M1" }).slots).toBe(OUTCOMES);
+    expect(keys(dashboardFor({ cases: cs, missions: ms, campaigns: [], audits: [], key: ALL }).slots)).toEqual(["confirmed", "not_confirmed", "inconclusive", "other"]);
+    expect(keys(dashboardFor({ cases: cs, missions: [feedback], campaigns: [], audits: [], key: ALL }).slots)).toEqual(["satisfied", "mixed", "unhappy", "other"]); // one mission: its own
+  });
+
+  it("changing mission redraws the legend with the new labels, and the donut grows from nothing", () => {
+    document.body.innerHTML = `<div data-donut data-values="[3,3,1,2]"></div><strong data-donut-centre>9</strong><div class="legend">${legendHtml(OUTCOMES, { same_job: 3, changed_job: 3, not_employed: 1, other: 2 })}</div>`;
+    const slots = slotsFor(feedback, false);
+    animateOutcomes(document.body, { satisfied: 4, mixed: 0, unhappy: 0, other: 0 }, slots);
+    const legend = document.querySelector(".legend")!;
+    expect(legend.textContent).toContain("Satisfied");
+    expect(legend.textContent).toContain("Mixed feelings");
+    expect(legend.textContent).not.toContain("Same job");
+    expect(JSON.parse((document.querySelector("[data-donut]") as HTMLElement).dataset.values!)).toHaveLength(4);
+  });
+
+  it("a finding label cannot inject markup into the legend", () => {
+    expect(legendHtml([["x", "<img src=x onerror=alert(1)>", "#000"]], { x: 1 })).not.toContain("<img");
   });
 });

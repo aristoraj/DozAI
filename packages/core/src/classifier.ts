@@ -2,7 +2,7 @@
 // cheaply. A model-based classifier (in @dozai/adapters) can be layered on top for replies the rules cannot place.
 // Either way the result is one of a fixed set of intents: free text from a participant never becomes an instruction.
 import type { Classification } from "@dozai/contracts";
-import { optionsOf, type Instrument, type Question } from "./instrument";
+import { isOptionalText, NOTHING_TO_ADD, optionsOf, type Instrument, type Question } from "./instrument";
 
 export interface ClassifyInput {
   text: string;
@@ -46,6 +46,17 @@ const CLARIFY = word("what do you mean|what does (it|that|this|[a-z]+( [a-z]+){0
 const DONT_KNOW = word("(i )?(do not|don t|dont|can t|cant|cannot) (know|say|tell|remember)|no idea|not sure|unsure|idk|pata nahi|pata nahin|pta nahi|nahi pata|nahin pata|maloom nahi|malum nahi|मालूम नहीं|पता नहीं|पता नही|नहीं पता|नहीं मालूम|याद नहीं");
 // Words that are not an answer to a text question: yes, no, none, nothing.
 const NON_ANSWER = new RegExp(`^(yes|y|yeah|yep|no|n|nope|na|n a|nil|none|nothing|haan|han|ha|ji|ok|okay|nahi|nahin|nhi|kuch nahi|koi nahi|हां|हाँ|हा|जी|नहीं|नही|ना|कुछ नहीं|कोई नहीं|कुछ नही|कोई नही)$`, "u");
+// "No", "nothing", "that's all": a complete answer to an open "anything else?" question, though not to a question that wants a name.
+const SAYS_NOTHING = /^(?:(?:no|nope|nah|nothing|none|nil|nahi|nahin|nhi|kuch nahi|koi nahi|कुछ नहीं|कोई नहीं|नहीं|नही|ना)(?: (?:no|nothing|none|else|more|thanks|thank you|thankyou|at all|really|sir|madam|ji|to add|to say|special))*|that s all|that is all|thats all|all good|i am good|i m good|no comments?|nothing to add|nothing more|nothing else)$/u;
+// A longer polite "no" ("no there is nothing more to add, thank you very much") is a reply made only of refusing words and polite filler.
+// One real content word ("no, the app froze") breaks it, so a complaint is never mistaken for "nothing".
+const REFUSING = new Set(["no", "nope", "nah", "nothing", "none", "nil", "nahi", "nahin", "nhi", "na", "not", "kuch", "koi", "नहीं", "नही", "कुछ", "कोई", "ना"]);
+const FILLER = new Set(["there", "is", "are", "i", "have", "has", "more", "to", "add", "say", "tell", "thank", "thanks", "you", "very", "much", "so", "for", "now", "that", "s", "all", "its", "it", "any", "anything", "else", "really", "at", "sir", "madam", "ji", "special", "m", "am", "comment", "comments", "thats", "further", "other", "dhanyavaad", "shukriya"]);
+export const saysNothing = (t: string): boolean => {
+  if (SAYS_NOTHING.test(t)) return true;
+  const w = t.split(" ").filter(Boolean);
+  return w.length >= 2 && w.length <= 12 && w.some(x => REFUSING.has(x)) && w.every(x => REFUSING.has(x) || FILLER.has(x));
+};
 const NEGATION = word("not|no|never|nahi|nahin|nhi|na|mat|नहीं|नही|ना|मत");
 // Words that may sit around a bare option number and still mean "I pick that one".
 const SELECTION_WORDS = new Set(["option", "number", "no", "answer", "ans", "is", "the", "it", "its", "it s", "please", "pls", "plz", "ji", "sahi", "hai", "wala", "wali", "one", "choose", "select", "pick", "नंबर", "विकल्प", "जी", "कृपया", "वाला", "है"]);
@@ -85,6 +96,9 @@ export class RuleClassifier implements ReplyClassifier {
       return this.faqOrUnclear(t, i);
     }
 
+    // An open "anything else?" question: "no" or "nothing" is the answer, and it is saved as such.
+    if (q && isOptionalText(q) && saysNothing(t)) return out({ intent: "answer", value: NOTHING_TO_ADD, confidence: 0.9 });
+
     // Free-text question. Yes, no, "I don't know" and a bare number are not answers to it.
     if (GREETING.test(t) || t.length < 2) return out({ intent: "off_topic", confidence: 0.8 });
     if (isDontKnow(t) || isNonAnswer(t)) return out({ intent: "unclear", confidence: 0.6 });
@@ -114,7 +128,10 @@ export function matchOption(t: string, q: Question) {
   const keyTokens = tokens.map(w => (ORDINALS[w] ?? w)).filter(w => options.some(o => o.key === w));
   if (keyTokens.length === 1 && tokens.every(w => options.some(o => o.key === (ORDINALS[w] ?? w)) || SELECTION_WORDS.has(w))) return options.find(o => o.key === keyTokens[0]);
 
-  const matches = options.filter(o => phrasesOf(o).some(n => t === n || has(t, [n])));
+  let matches = options.filter(o => phrasesOf(o).some(n => t === n || has(t, [n])));
+  // "not smooth" contains "smooth": when one option's phrase sits inside another's, the longer, more specific one is what was said.
+  const longest = (o: typeof options[number]) => phrasesOf(o).filter(n => t === n || has(t, [n])).sort((a, b) => b.length - a.length)[0]!;
+  if (matches.length > 1) matches = matches.filter(m => !matches.some(o => o !== m && longest(o).length > longest(m).length && longest(o).includes(longest(m))));
   if (matches.length !== 1) return undefined;
   const chosen = matches[0]!;
   const phrase = phrasesOf(chosen).filter(n => t === n || has(t, [n])).sort((a, b) => b.length - a.length)[0]!;
@@ -147,6 +164,7 @@ export function validateAnswer(q: Question, a: { option_key?: string; value?: st
   const v = (a.value ?? "").trim().replace(/\s+/g, " ");
   if (v.length < 2 || v.length > 300) return null;
   const t = norm(v);
+  if (isOptionalText(q) && saysNothing(t)) return { value: NOTHING_TO_ADD }; // "no" is a real answer to "anything else?"
   if (!t || isNonAnswer(t) || isDontKnow(t)) return null;
   return { value: v };
 }

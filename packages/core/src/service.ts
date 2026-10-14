@@ -4,7 +4,7 @@ import type { CaseEvent, CaseRecord, Decision, EventType, Evidence, LivelihoodSt
 import { canAutoConfirm, checkContact, DEFAULT_POLICY, localHour, transitionCase, type ContactCheck, type ContactPolicy } from "@dozai/domain";
 import { GENESIS, hashEvent, newId, verifyChain, type ChainCheck } from "./ledger";
 import { DEFAULT_EMPLOYEE_ID, parseEmployee, VERIFICATION_EMPLOYEE_V1, type EmployeeDefinition } from "./employee";
-import { parseMission, PLACEMENT_RETENTION_V1, type MissionBundle } from "./mission";
+import { findingProblem, parseMission, PLACEMENT_RETENTION_V1, type MissionBundle } from "./mission";
 import type { OutboxItem, ReviewTask, Store } from "./store";
 import { actionKindOf, ControlsPatchSchema, defaultControls, type Controls } from "./controls";
 import { memoryProblem, withNote, type CaseMemory, type MemoryKey } from "./memory";
@@ -25,7 +25,8 @@ export interface InboundInput {
 
 export interface ProposeInput {
   proposed_outcome: Outcome;
-  livelihood_state: LivelihoodState | null;
+  /** One of the mission's own findings (see MissionBundle.outcomes), or null when the evidence does not settle it. */
+  livelihood_state: string | null;
   confidence: number; // 0..1
   evidence_refs: string[];
   rationale: string;
@@ -452,7 +453,7 @@ export class CaseService {
 
   // ---- agent proposals and review -------------------------------------------
 
-  async detectConflict(c: CaseRecord, state: LivelihoodState | null): Promise<{ has: boolean; reason: string }> {
+  async detectConflict(c: CaseRecord, state: string | null): Promise<{ has: boolean; reason: string }> {
     const p = await this.store.getParticipant(c.tenant_id, c.participant_id);
     const ev = await this.store.listEvidence(c.case_id);
     const employer = ev.find(e => e.question_id === "employer_name")?.value;
@@ -470,6 +471,9 @@ export class CaseService {
     const known = new Set((await this.store.listEvidence(caseId)).map(e => e.evidence_id));
     const missing = input.evidence_refs.filter(r => !known.has(r));
     if (missing.length) throw new DozaiError("UNKNOWN_EVIDENCE", `unknown evidence: ${missing.join(", ")}`);
+    // The finding must be one this mission defines, so a feedback mission cannot end with "same job". The agent is told which are allowed.
+    const bad = findingProblem(await this.getMission(tenant, c.mission_version), input.livelihood_state);
+    if (bad) throw new DozaiError("UNKNOWN_FINDING", bad, 422);
     if (input.proposed_outcome === "opted_out" || input.proposed_outcome === "cancelled") throw new DozaiError("OUTCOME_NOT_PROPOSABLE", "opt-out and cancel come from participant events or humans, not proposals");
 
     const decision: Decision = { decision_id: newId("dec"), case_id: caseId, kind: "proposal", proposed_outcome: input.proposed_outcome, livelihood_state: input.livelihood_state, confidence: input.confidence, evidence_refs: input.evidence_refs, rationale: input.rationale, actor, ts: this.now().toISOString() };

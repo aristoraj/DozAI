@@ -22,6 +22,12 @@ export type Channel = (typeof CHANNELS)[number];
 export const StatusSchema = z.enum(STATUSES);
 export const OutcomeSchema = z.enum(OUTCOMES);
 export const LivelihoodStateSchema = z.enum(LIVELIHOOD_STATES);
+/**
+ * What the agent found out about a person: one of the findings the mission defines (for a placement mission "same_job" or
+ * "changed_job", for a feedback mission perhaps "satisfied" or "unhappy"). The platform checks it against the mission's own list.
+ * (The field is still called livelihood_state in stored data and in the tool, from when there was only the placement mission.)
+ */
+export const FindingSchema = z.string().trim().min(1).max(40);
 export const RoleSchema = z.enum(ROLES);
 
 // ---- Ledger -----------------------------------------------------------------
@@ -60,7 +66,7 @@ export const CaseRecordSchema = z.object({
   participant_id: z.string(),
   status: StatusSchema,
   outcome: OutcomeSchema.nullable(),
-  livelihood_state: LivelihoodStateSchema.nullable(),
+  livelihood_state: FindingSchema.nullable(),
   confidence: z.number().min(0).max(100),
   version: z.number().int().positive(),
   next_action: z.string(),
@@ -114,7 +120,7 @@ export const DecisionSchema = z.object({
   case_id: z.string(),
   kind: z.enum(["proposal", "final"]),
   proposed_outcome: OutcomeSchema.nullable(),
-  livelihood_state: LivelihoodStateSchema.nullable(),
+  livelihood_state: FindingSchema.nullable(),
   confidence: z.number().min(0).max(1),
   evidence_refs: z.array(z.string()),
   rationale: z.string(),
@@ -144,13 +150,13 @@ export const ToolInputs = {
   mission_get_bundle: z.object({ mission_version_id: z.string() }),
   case_get_timeline: z.object({ case_id: z.string(), limit: z.number().int().min(1).max(50).default(20) }),
   whatsapp_send_template: z.object({ ...writeFields, template_key: z.string() }),
-  callback_schedule: z.object({ ...writeFields, after_hours: z.number().min(1).max(72), channel: z.enum(["whatsapp", "voice"]) }),
+  callback_schedule: z.object({ ...writeFields, after_hours: z.number().min(1).max(72), channel: z.enum(["whatsapp", "voice"]).optional() }),
   // Ask for a phone call now, or at a time inside the contact hours. The call asks only for what is still missing.
   voice_call_request: z.object({ ...writeFields, reason: z.string().trim().min(5).max(300), start_at: z.string().datetime().optional() }),
   decision_propose: z.object({
     ...writeFields,
     proposed_outcome: OutcomeSchema,
-    livelihood_state: LivelihoodStateSchema.nullable(),
+    livelihood_state: FindingSchema.nullable(),
     confidence: z.number().min(0).max(1),
     evidence_refs: z.array(z.string()),
     rationale: z.string().min(1),
@@ -228,6 +234,8 @@ export const QuestionSchema = z.object({
   text: text900,
   /** How to say it on a phone call, when the written wording does not work aloud. Left out: the written text is adapted automatically. */
   spoken: text900.optional(),
+  /** An open "anything else?" question: "no" or "nothing" is a fine answer. */
+  optional: z.boolean().optional(),
   options: z.array(QuestionOptionSchema).max(10).optional(),
   evidence_key: ident,
   next: z.array(z.object({ when: z.object({ equals: z.string().max(60) }).optional(), goto: z.string().nullable() })).max(12).optional(),
@@ -309,6 +317,19 @@ export const EmployeeInputSchema = z.object({
 });
 export type EmployeeInput = z.infer<typeof EmployeeInputSchema>;
 
+/** One thing the mission can find out about a person, in plain words. The agent picks one when it proposes a result. */
+export const MissionOutcomeSchema = z.object({
+  key: ident,
+  label: z.string().trim().min(2).max(60),
+  description: z.string().trim().max(200).optional(),
+});
+/** What the three general results mean for this mission, in a few words each. */
+export const VerdictLabelsSchema = z.object({
+  confirmed: z.string().trim().min(2).max(40),
+  not_confirmed: z.string().trim().min(2).max(40),
+  inconclusive: z.string().trim().min(2).max(40),
+}).partial();
+
 export const MissionInputSchema = z.object({
   mission_id: z.string().regex(/^[A-Za-z0-9-]{3,30}$/, "mission_id: letters, numbers and dashes, 3-30 characters"),
   version: z.string().regex(/^[A-Za-z0-9._-]{3,40}$/, "version: letters, numbers, dots, dashes and underscores, 3-40 characters"),
@@ -324,6 +345,10 @@ export const MissionInputSchema = z.object({
   /** What must be known about each person for the case to be judged. Missions saved before this existed have none. */
   evidence_requirements: z.array(RequirementSchema).max(40).optional(),
   strategy: StrategySchema.optional(),
+  /** What the mission can find out about a person. The agent proposes one of these, and the cases list shows it. Missions saved before this have none. */
+  outcomes: z.array(MissionOutcomeSchema).min(2).max(8).optional(),
+  /** What "confirmed", "not confirmed" and "inconclusive" mean for this mission, for example "Feedback collected". Left out: the plain words. */
+  verdict_labels: VerdictLabelsSchema.optional(),
   /** The template that opens contact. Must be one of `templates`. */
   intro_template: z.string(),
   templates: z.array(z.object({
@@ -376,6 +401,9 @@ export const MissionDraftSchema = z.object({
   /** Working notes for the employee, drawn from the approach in the brief. Never overrides the safety rules. */
   agent_guidance: z.string().trim().max(2000).optional(),
   strategy: StrategySchema,
+  /** The findings the mission can end with (two to six), each with a plain label. */
+  outcomes: z.array(MissionOutcomeSchema).min(2).max(8).optional(),
+  verdict_labels: VerdictLabelsSchema.optional(),
   /** Everything that must be known about a person, each with at least one question that can fill it. */
   evidence_requirements: z.array(RequirementSchema).min(1).max(20),
   questions: z.array(QuestionSchema).min(1).max(30),

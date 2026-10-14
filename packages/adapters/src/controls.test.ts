@@ -277,6 +277,27 @@ describe("the wake service", () => {
     expect(ctx.wake_ups.map(x => x.reason)).toEqual(["agent_requested"]);
   });
 
+  it("a reminder can be set right after the first message, before the person has replied: it contacts nobody, so consent does not apply", async () => {
+    const w = await world();
+    expect((await w.act("whatsapp_send_template", { template_key: M.intro_template })).error).toBeUndefined();
+    // the person has not replied, so a SECOND contact is refused for consent (this is what protects them)...
+    expect((await w.askCall()).error?.code).toBe("CONSENT_REQUIRED");
+    // ...but looking at the case again later is not contact. This used to be refused too, which ended the agent's session.
+    const r = await w.act("callback_schedule", { after_hours: 6 });
+    expect(r.error).toBeUndefined();
+    expect((r.data as { wake_at: string }).wake_at).toBe(new Date(w.clock.t.getTime() + 6 * HOUR).toISOString());
+    expect((await w.svc.store.listEvents(T, w.id)).find(e => e.type === "callback_scheduled")!.summary).toBe("The agent will look at this case again in 6h");
+  });
+
+  it("a reminder says which way the agent plans to follow up when it gives one, and is refused only for someone who opted out", async () => {
+    const w = await world();
+    await w.act("callback_schedule", { after_hours: 6, channel: "voice" });
+    expect((await w.svc.store.listEvents(T, w.id)).find(e => e.type === "callback_scheduled")!.summary).toBe("The agent will look at this case again in 6h (plan: a call)");
+    const p = (await w.svc.store.getParticipant(T, "p-C-1"))!;
+    await w.svc.store.putParticipant({ ...p, consent: "declined" });
+    expect((await w.act("callback_schedule", { after_hours: 6 })).error?.code).toBe("CONTACT_NOT_ALLOWED");
+  });
+
   it("stops waking the agent after the limit and asks a person to look instead", async () => {
     const w = await world();
     await w.svc.updateControls(admin, { max_wakes_per_case: 1 });
